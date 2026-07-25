@@ -96,12 +96,11 @@ def _project(
 
 
 def _replace_paths(value: Any, translations: dict[str, str]) -> Any:
+    # Only a return value that is itself a path string is treated as a
+    # reported path. A filename buried inside a container is far likelier to
+    # be data than a path reference, so recursing would clobber it.
     if isinstance(value, str):
         return translations.get(value, value)
-    if isinstance(value, list):
-        return [_replace_paths(item, translations) for item in value]
-    if isinstance(value, dict):
-        return {key: _replace_paths(item, translations) for key, item in value.items()}
     return value
 
 

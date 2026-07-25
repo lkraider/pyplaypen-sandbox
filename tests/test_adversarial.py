@@ -48,3 +48,18 @@ async def test_str_coerced_keys_do_not_silently_drop_data(tmp_path, sandbox, cod
         )
     else:
         assert result["error"]["type"] == "serialization"
+
+
+# --- path translation must not clobber ordinary data strings ---
+
+async def test_data_string_matching_a_filename_is_not_rewritten(tmp_path, sandbox):
+    """The return-value path rewrite is meant to relocate paths the program
+    reports, not to mangle arbitrary strings. A value the program set to the
+    literal "a.txt" (as data, not a path it returned to point at the file)
+    must survive unchanged."""
+    result = await run(
+        'open("a.txt", "w").write("x")\n{"label": "a.txt", "n": 1}',
+        artifact_dir=str(tmp_path), sandbox=sandbox,
+    )
+    assert result["status"] == "ok"
+    assert result["return_value"]["label"] == "a.txt"
