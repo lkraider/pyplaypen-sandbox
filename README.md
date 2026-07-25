@@ -43,15 +43,19 @@ the integration a project actually needs, not copy the examples verbatim.
 
 Copy-paste to a coding agent, for a project integration:
 
-> Set up a process sandbox in this project using
-> https://github.com/lkraider/pyplaypen-sandbox. Read the README fully
-> first, then decide the integration this project needs — don't just
-> paste its examples.
+```
+Set up a process sandbox in this project using
+https://github.com/lkraider/pyplaypen-sandbox. Read the README fully
+first, then decide the integration this project needs — don't just
+paste its examples.
+```
 
 Or for a single one-off call:
 
-> Use https://github.com/lkraider/pyplaypen-sandbox to run this Python
-> snippet in an isolated subprocess and return the result: `<code>`
+```
+Use https://github.com/lkraider/pyplaypen-sandbox to run this Python
+snippet in an isolated subprocess and return the result: <code>
+```
 
 ## Install
 
