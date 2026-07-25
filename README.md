@@ -34,6 +34,13 @@ that:
 
 ## For coding agents
 
+For a single one-off call:
+
+```
+Use https://github.com/lkraider/pyplaypen-sandbox to run this Python
+snippet in an isolated subprocess and return the result: <code>
+```
+
 This repo is meant to be adapted, not just vendored in as-is — see
 "Extending it" and "Lower-level building blocks" below for the actual
 decision points (`execute()` vs. `run_process()`, whether a
@@ -48,13 +55,6 @@ Set up a process sandbox in this project using
 https://github.com/lkraider/pyplaypen-sandbox. Read the README fully
 first, then decide the integration this project needs — don't just
 paste its examples.
-```
-
-Or for a single one-off call:
-
-```
-Use https://github.com/lkraider/pyplaypen-sandbox to run this Python
-snippet in an isolated subprocess and return the result: <code>
 ```
 
 ## Install
