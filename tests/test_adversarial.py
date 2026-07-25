@@ -83,3 +83,55 @@ async def test_hardlink_to_outside_file_is_not_captured_as_an_artifact(tmp_path,
         assert captured.read_text() != "TOPSECRET", "outside content exfiltrated via hardlink"
     else:
         assert result["error"]["type"] == "artifact_limit"
+
+
+# --- robustness guards: hostile termination must not hang or crash the parent ---
+
+async def test_child_exiting_without_a_frame_is_a_prompt_typed_error(tmp_path, sandbox):
+    result = await asyncio.wait_for(
+        run("import os\nos._exit(0)", artifact_dir=str(tmp_path), sandbox=sandbox),
+        timeout=10,
+    )
+    assert result["status"] == "error"
+    assert result["error"]["type"] in {"protocol", "crash", "runtime"}
+
+
+async def test_deep_nesting_is_a_serialization_error_not_a_recursion_crash(tmp_path, sandbox):
+    result = await run(
+        "x = 0\nfor _ in range(200):\n    x = [x]\nx",
+        artifact_dir=str(tmp_path), sandbox=sandbox,
+    )
+    assert result["status"] == "error"
+    assert result["error"]["type"] == "serialization"
+
+
+async def test_projector_that_never_converges_is_bounded_not_hung(tmp_path):
+    sandbox = Sandbox(self_check=False, type_projector="fixtures.example_projector:infinite_project")
+    context = Context(artifact_root=tmp_path, env=_env())
+    result = await asyncio.wait_for(
+        sandbox.execute("from fixtures.example_projector import Bomb\nBomb()", context),
+        timeout=10,
+    )
+    assert result["status"] == "error"
+    assert result["error"]["type"] == "serialization"
+
+
+async def test_oversized_result_frame_is_a_typed_error_not_a_hang(tmp_path, sandbox):
+    limits = replace(DEFAULT_LIMITS, result_frame_bytes=8)
+    result = await asyncio.wait_for(
+        run('{"value": 12345}', artifact_dir=str(tmp_path), sandbox=sandbox, limits=limits),
+        timeout=10,
+    )
+    assert result["status"] == "error"
+    assert result["error"]["type"] in {"protocol", "return_limit"}
+
+
+async def test_lone_surrogate_return_does_not_crash_the_child(tmp_path, sandbox):
+    """A str with an unpaired surrogate can't be UTF-8 encoded. It must come
+    back as a typed error, not tear down the result channel."""
+    result = await asyncio.wait_for(
+        run(r"'\ud800'", artifact_dir=str(tmp_path), sandbox=sandbox), timeout=10,
+    )
+    assert result["status"] == "error"
+    assert result["error"]["type"] in {"serialization", "runtime"}
+    assert result["return_value"] is None

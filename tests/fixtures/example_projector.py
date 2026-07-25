@@ -15,3 +15,14 @@ def project(value):
 
 def broken_project(value):
     raise RuntimeError("always fails")
+
+
+class Bomb:
+    pass
+
+
+def infinite_project(value):
+    """Never converges to plain data: always hands back another unsupported
+    value. The projection depth cap must stop this, not the interpreter's
+    recursion limit or a hang."""
+    return Bomb()
