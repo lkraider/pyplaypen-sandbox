@@ -314,8 +314,9 @@ result = await run("1 + 1", artifact_dir="./artifacts")
   <p>
     This library's guarantees don't stop at <code>execute()</code>.
     <code>Sandbox.run_process(argv, cwd=...)</code> is its argv-only twin:
-    same isolation, no JSON protocol, for code that already speaks in files
-    and exit codes. And <code>pyplaypen_sandbox.privilege</code> is the two
+    same isolation, no JSON protocol, and no Python required — <code>argv</code>
+    is any executable, for code that already speaks in files and exit
+    codes. And <code>pyplaypen_sandbox.privilege</code> is the two
     functions underneath both: real rlimits and a real UID drop, usable in
     a plain <code>subprocess.Popen(preexec_fn=...)</code> without adopting
     anything else here.
