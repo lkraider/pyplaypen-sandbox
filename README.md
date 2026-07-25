@@ -174,21 +174,21 @@ it are public on purpose:
 
 **`Sandbox.run_process(argv, cwd=...)`** — the argv twin of `execute()`.
 Same rlimits, UID drop, process-group timeout/kill, and subreaper
-reaping, but no JSON protocol and no Python involved: `argv` is any
-executable — a Python script via `sys.executable`, a shell script, a
-compiled binary, whatever `execvp` can run. It gives you back exit status
-plus bounded/hashed stdout+stderr. Use this when your code doesn't speak
-the return-value protocol and you already have your own way of
-collecting output files, e.g. a fixed entrypoint run per call:
+reaping, but no JSON protocol: it runs an existing program (a script you
+already materialized on disk, a CLI, whatever) and gives you back exit
+status plus bounded/hashed stdout+stderr. Use this when your code doesn't
+speak the return-value protocol and you already have your own way of
+collecting output files, e.g. a fixed entrypoint script run per call:
 
 ```python
 result = await sandbox.run_process(
     [sys.executable, "entrypoint.py"], cwd=workspace, limits=Limits(wall_seconds=60),
 )
-# or just as well: ["./entrypoint.sh"], ["/usr/bin/some-tool", "--flag"], ...
 # {"status": "ok" | "timeout" | "busy" | "cancelled" | "internal",
 #  "returncode": int | None, "timed_out": bool, "stdout": str, "stderr": str}
 ```
+
+`argv` accepts any process: a script, a shell command, a compiled binary.
 
 **`pyplaypen_sandbox.privilege`** — the two primitives everything else is
 built from, with no dependency on `Sandbox`, asyncio, or anything else in
