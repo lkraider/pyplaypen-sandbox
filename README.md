@@ -238,6 +238,15 @@ per-tenant container isolation underneath it. A restricted language is a
 stronger standalone safety claim than full CPython isolated by a
 container that remains the real boundary, which is what this library is.
 
+## Container reference
+
+The repo's `Dockerfile` is the intended shape: a Linux image that creates a
+dedicated non-root UID and installs the package, with the parent free to stay
+root so each call drops to that UID — which is what makes `RLIMIT_NPROC` bind.
+Base your own image on it, or copy the pattern. CI builds its `test` stage and
+runs the suite both as root and as the dedicated UID, so the privileged and
+unprivileged paths are exercised on real Linux, not just where they no-op.
+
 ## Platform notes
 
 `RLIMIT_AS` and `RLIMIT_NPROC` are Linux-only (not enforced on macOS/BSD —
