@@ -23,9 +23,8 @@ that:
 - enables `PR_SET_CHILD_SUBREAPER` on Linux so orphaned grandchildren still
   get reaped after the process group is torn down
 - captures stdout/stderr bounded and SHA-256-hashed, and returns the child's
-  final expression value as JSON (numpy/pandas objects are projected to
-  plain JSON if those libraries are importable; neither is a dependency of
-  this package)
+  final expression value as JSON (plain Python types only, by default —
+  anything else needs a `type_projector`, see "Extending it")
 - collects files written into the call's workspace as artifacts, rejecting
   symlinks and any path that would escape the workspace, with per-file,
   aggregate, and count byte limits
@@ -39,8 +38,8 @@ that:
 pip install pyplaypen-sandbox
 ```
 
-No required dependencies. `numpy`/`pandas` are used for return-value
-projection only if already importable in your environment.
+No required dependencies, and none optional either — see `type_projector`
+below if you need numpy/pandas (or anything else) in return values.
 
 ## Usage
 
@@ -114,6 +113,38 @@ never reads it. A bad provider (missing module, wrong return type) fails as
 `error.type == "extension"`, distinct from user-code errors, and — if
 `self_check=True` (the default) — is caught at `Sandbox()` construction
 time rather than on first call.
+
+The same shape extends what a return value can *be*. `_project()` (the
+function that turns your final expression into JSON) knows only plain
+Python types — anything else needs a `type_projector`, one function taking
+an unsupported value and returning something projectable (plain data, or
+another unsupported value — it recurses):
+
+```python
+# yourpkg/sandbox_ext.py
+def project(value):
+    if isinstance(value, YourType):
+        return {"field": value.field}
+    raise ValueError(f"no projection for {type(value).__name__}")
+```
+
+```python
+sandbox = Sandbox(type_projector="yourpkg.sandbox_ext:project")
+```
+
+numpy/pandas support is not built in — it's the shipped example of this
+exact mechanism, in `pyplaypen_sandbox.projectors`, usable as-is:
+
+```python
+sandbox = Sandbox(type_projector="pyplaypen_sandbox.projectors:project_numpy_pandas")
+result = await sandbox.execute("import numpy as np\nnp.array([1, 2])", context)
+# {"status": "ok", "return_value": [1, 2], ...}
+```
+
+Without a `type_projector` configured, returning a numpy array (or any
+other non-plain type) is `error.type == "serialization"` — same failure
+mode as any other unprojectable value, since as far as this library is
+concerned, that's exactly what it is.
 
 ## Lower-level building blocks
 

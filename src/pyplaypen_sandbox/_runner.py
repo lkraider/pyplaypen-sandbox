@@ -33,11 +33,24 @@ class ProjectionError(ValueError):
     pass
 
 
-def _project(value: Any, *, seen: set[int] | None = None, depth: int = 0) -> Any:
-    """Project a Python (optionally numpy/pandas) value into JSON-safe data.
+def _resolve(provider_path: str) -> Any:
+    """Import 'module:function' and return the function object. Shared by
+    globals_provider and type_projector — same 'module:function' shape,
+    same resolution rule."""
+    module_name, _, func_name = provider_path.partition(":")
+    if not func_name:
+        raise ValueError("expected 'module:function'")
+    return getattr(importlib.import_module(module_name), func_name)
 
-    numpy/pandas are imported lazily and only touched if the value's own
-    module says so, so neither is a hard dependency of this library.
+
+def _project(
+    value: Any, *, seen: set[int] | None = None, depth: int = 0,
+    type_projector: str | None = None,
+) -> Any:
+    """Project a value into JSON-safe data. This function knows nothing
+    about any third-party type — anything beyond plain scalars/containers/
+    datetimes needs a type_projector (see projectors.py for a numpy/pandas
+    example) or it's an error, same as an unconfigured extension point.
     """
     if depth > MAX_PROJECTION_DEPTH:
         raise ProjectionError("return value exceeds maximum nesting depth")
@@ -50,32 +63,6 @@ def _project(value: Any, *, seen: set[int] | None = None, depth: int = 0) -> Any
     if isinstance(value, (datetime, date, time, Decimal, Path)):
         return value.isoformat() if hasattr(value, "isoformat") else str(value)
 
-    module = type(value).__module__.split(".", 1)[0]
-    if module == "numpy":
-        import numpy as np
-        if isinstance(value, np.ndarray):
-            return _project(value.tolist(), seen=seen, depth=depth + 1)
-        if isinstance(value, np.generic):
-            return _project(value.item(), seen=seen, depth=depth + 1)
-    if module == "pandas":
-        import pandas as pd
-        if value is pd.NA or value is pd.NaT:
-            return None
-        if isinstance(value, pd.Timestamp):
-            return value.isoformat()
-        if isinstance(value, pd.DataFrame):
-            return {
-                "columns": [str(item) for item in value.columns.tolist()],
-                "rows": _project(value.values.tolist(), seen=seen, depth=depth + 1),
-                "row_count": int(len(value)),
-            }
-        if isinstance(value, pd.Series):
-            return {
-                "name": None if value.name is None else str(value.name),
-                "index": _project(value.index.tolist(), seen=seen, depth=depth + 1),
-                "values": _project(value.tolist(), seen=seen, depth=depth + 1),
-            }
-
     if isinstance(value, (list, tuple, set, frozenset, dict)):
         identity = id(value)
         active = set() if seen is None else seen
@@ -85,12 +72,22 @@ def _project(value: Any, *, seen: set[int] | None = None, depth: int = 0) -> Any
         try:
             if isinstance(value, dict):
                 return {
-                    str(key): _project(item, seen=active, depth=depth + 1)
+                    str(key): _project(item, seen=active, depth=depth + 1, type_projector=type_projector)
                     for key, item in value.items()
                 }
-            return [_project(item, seen=active, depth=depth + 1) for item in value]
+            return [
+                _project(item, seen=active, depth=depth + 1, type_projector=type_projector)
+                for item in value
+            ]
         finally:
             active.remove(identity)
+
+    if type_projector:
+        try:
+            projected = _resolve(type_projector)(value)
+        except Exception as exc:
+            raise ProjectionError(f"type_projector failed for {type(value).__name__}: {exc}") from exc
+        return _project(projected, seen=seen, depth=depth + 1, type_projector=type_projector)
 
     raise ProjectionError(f"unsupported return type: {type(value).__name__}")
 
@@ -127,11 +124,7 @@ def _load_globals(provider_path: str, ctx: dict[str, Any]) -> dict[str, Any]:
     just gets to add names (numpy, pandas, an HTTP client, whatever the
     caller's own module imports) that this library never has to depend on.
     """
-    module_name, _, func_name = provider_path.partition(":")
-    if not func_name:
-        raise ValueError("globals_provider must be 'module:function'")
-    provider = getattr(importlib.import_module(module_name), func_name)
-    result = provider(ctx)
+    result = _resolve(provider_path)(ctx)
     if not isinstance(result, dict) or not all(isinstance(key, str) for key in result):
         raise ValueError("globals_provider must return a dict[str, Any]")
     return result
@@ -197,7 +190,7 @@ def _run(payload: dict[str, Any]) -> dict[str, Any]:
             expression = ast.Expression(final_expression.value)
             ast.fix_missing_locations(expression)
             result = eval(compile(expression, "<sandbox_code>", "eval"), globals_map, globals_map)
-        projected = _project(result)
+        projected = _project(result, type_projector=context.get("type_projector"))
         artifacts, translations = _provisional_artifacts(workspace, artifact_root, limits)
         projected = _replace_paths(projected, translations)
         encoded = json.dumps(projected, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
@@ -231,14 +224,14 @@ def _write_frame(fd: int, payload: dict[str, Any]) -> None:
         stream.flush()
 
 
-def _self_check(provider_path: str | None) -> int:
-    if provider_path:
-        module_name, _, func_name = provider_path.partition(":")
+def _self_check(globals_provider: str | None, type_projector: str | None) -> int:
+    for label, path in (("globals_provider", globals_provider), ("type_projector", type_projector)):
+        if not path:
+            continue
         try:
-            if not func_name or not hasattr(importlib.import_module(module_name), func_name):
-                raise ImportError(f"{func_name!r} not found in {module_name!r}")
+            _resolve(path)
         except Exception as exc:
-            print(json.dumps({"status": "error", "message": f"globals_provider: {exc}"}, separators=(",", ":")))
+            print(json.dumps({"status": "error", "message": f"{label}: {exc}"}, separators=(",", ":")))
             return 1
     print(json.dumps({"status": "ok", "python": sys.version.split()[0]}, separators=(",", ":")))
     return 0
@@ -249,9 +242,10 @@ def main() -> int:
     parser.add_argument("--result-fd", type=int)
     parser.add_argument("--self-check", action="store_true")
     parser.add_argument("--globals-provider")
+    parser.add_argument("--type-projector")
     args = parser.parse_args()
     if args.self_check:
-        return _self_check(args.globals_provider)
+        return _self_check(args.globals_provider, args.type_projector)
     if args.result_fd is None:
         parser.error("--result-fd is required")
     try:

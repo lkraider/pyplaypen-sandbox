@@ -94,11 +94,20 @@ for name, body in files.items():
         assert (tmp_path / item["path"]).is_file()
 
 
-@pytest.mark.skipif(
-    importlib.util.find_spec("numpy") is None or importlib.util.find_spec("pandas") is None,
-    reason="numpy/pandas not installed; projection is exercised only when importable",
-)
-async def test_numpy_and_pandas_projection(tmp_path, sandbox):
+_NUMPY_PANDAS_MISSING = importlib.util.find_spec("numpy") is None or importlib.util.find_spec("pandas") is None
+
+
+async def test_numpy_array_without_a_type_projector_is_a_typed_serialization_error(tmp_path, sandbox):
+    if _NUMPY_PANDAS_MISSING:
+        pytest.skip("numpy/pandas not installed")
+    result = await run("import numpy as np\nnp.array([1, 2])", artifact_dir=str(tmp_path), sandbox=sandbox)
+    assert result["status"] == "error"
+    assert result["error"]["type"] == "serialization"
+
+
+@pytest.mark.skipif(_NUMPY_PANDAS_MISSING, reason="numpy/pandas not installed")
+async def test_numpy_and_pandas_projection_via_the_shipped_type_projector(tmp_path):
+    sandbox = Sandbox(self_check=False, type_projector="pyplaypen_sandbox.projectors:project_numpy_pandas")
     code = '''
 import numpy as np
 import pandas as pd

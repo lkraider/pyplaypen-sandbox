@@ -203,16 +203,18 @@ class Sandbox:
         child_uid: int = 65534,
         child_env: Mapping[str, str] | None = None,
         globals_provider: str | None = None,
+        type_projector: str | None = None,
     ) -> None:
         if not 1 <= max_concurrency <= 32:
             raise ValueError("max_concurrency must be between 1 and 32")
         self.max_concurrency = max_concurrency
         self.child_uid = child_uid
         self.globals_provider = globals_provider
+        self.type_projector = type_projector
         self._subreaper_enabled = self._enable_subreaper()
         self._semaphore = asyncio.Semaphore(max_concurrency)
         if self_check:
-            self._run_self_check(startup_timeout, child_env, globals_provider)
+            self._run_self_check(startup_timeout, child_env, globals_provider, type_projector)
 
     @staticmethod
     def _enable_subreaper() -> bool:
@@ -229,11 +231,16 @@ class Sandbox:
             return False
 
     @staticmethod
-    def _run_self_check(timeout: float, child_env: Mapping[str, str] | None, globals_provider: str | None) -> None:
+    def _run_self_check(
+        timeout: float, child_env: Mapping[str, str] | None,
+        globals_provider: str | None, type_projector: str | None,
+    ) -> None:
         env = dict(os.environ if child_env is None else child_env)
         argv = [sys.executable, "-m", "pyplaypen_sandbox._runner", "--self-check"]
         if globals_provider:
             argv += ["--globals-provider", globals_provider]
+        if type_projector:
+            argv += ["--type-projector", type_projector]
         try:
             result = subprocess.run(
                 argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -303,6 +310,7 @@ class Sandbox:
                     "workspace": str(workspace),
                     "uid": self.child_uid,
                     "globals_provider": self.globals_provider,
+                    "type_projector": self.type_projector,
                     "extra": dict(context.extra),
                 },
                 "limits": limits_dict,
