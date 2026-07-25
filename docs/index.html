@@ -89,6 +89,112 @@
   }
   footer p { margin: 0.5em 0; }
   .links a { margin-right: 1.2em; white-space: nowrap; }
+
+  .diagram {
+    margin: 2.2rem 0 0.6rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  .diagram-top, .connectors {
+    display: flex;
+    gap: clamp(1rem, 5vw, 2.5rem);
+  }
+  .node-iface, .connector {
+    width: clamp(6.5rem, 24vw, 11rem);
+  }
+  .node {
+    border-radius: 6px;
+    padding: 0.65em 0.8em;
+    text-align: center;
+  }
+  .node-iface {
+    border: 1px dashed var(--rule);
+    background: var(--code-bg);
+  }
+  .node-base {
+    border: 1px solid var(--ink);
+    width: min(100%, 24.5rem);
+  }
+  .node-title {
+    display: block;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.82em;
+    font-weight: 600;
+  }
+  .node-sub {
+    display: block;
+    font-size: 0.74em;
+    color: var(--muted);
+    margin-top: 0.3em;
+    line-height: 1.4;
+  }
+  .connector {
+    height: 1.5rem;
+    position: relative;
+    display: flex;
+    justify-content: center;
+  }
+  .connector .line {
+    width: 1px;
+    height: 100%;
+    background: var(--rule);
+  }
+  .connector .pulse {
+    position: absolute;
+    left: 50%;
+    top: 100%;
+    width: 6px;
+    height: 6px;
+    margin-left: -3px;
+    border-radius: 50%;
+    background: var(--ink);
+    opacity: 0;
+  }
+  .diagram figcaption {
+    max-width: 26rem;
+    text-align: center;
+    font-size: 0.85em;
+    color: var(--muted);
+    margin-top: 1.1rem;
+    line-height: 1.5;
+  }
+  @keyframes iface-a {
+    0%   { opacity: 0; transform: scale(.94); }
+    4%   { opacity: 1; transform: scale(1); }
+    42%  { opacity: 1; transform: scale(1); }
+    48%  { opacity: 0; transform: scale(.94); }
+    100% { opacity: 0; }
+  }
+  @keyframes iface-b {
+    0%, 50% { opacity: 0; transform: scale(.94); }
+    54%     { opacity: 1; transform: scale(1); }
+    92%     { opacity: 1; transform: scale(1); }
+    98%     { opacity: 0; transform: scale(.94); }
+    100%    { opacity: 0; }
+  }
+  @keyframes pulse-a {
+    0%, 1% { opacity: 0; top: 100%; }
+    2%     { opacity: 1; top: 100%; }
+    6%     { opacity: 1; top: 0%; }
+    8%, 100% { opacity: 0; }
+  }
+  @keyframes pulse-b {
+    0%, 50% { opacity: 0; top: 100%; }
+    52%     { opacity: 1; top: 100%; }
+    56%     { opacity: 1; top: 0%; }
+    58%, 100% { opacity: 0; }
+  }
+  #node-execute { animation: iface-a 6s infinite; }
+  #node-runprocess { animation: iface-b 6s infinite; }
+  .pulse-a { animation: pulse-a 6s infinite; }
+  .pulse-b { animation: pulse-b 6s infinite; }
+  @media (prefers-reduced-motion: reduce) {
+    #node-execute, #node-runprocess {
+      animation: none; opacity: 1; transform: none;
+    }
+    .pulse-a, .pulse-b { animation: none; opacity: 0; }
+  }
 </style>
 </head>
 <body>
@@ -96,6 +202,28 @@
 
   <h1>pyplaypen-sandbox</h1>
   <p class="lede">One-shot subprocess sandbox for running Python inside a container.</p>
+
+  <figure class="diagram" aria-label="Diagram: one shared supervision skeleton underneath two interfaces, execute() and run_process(), each independently spawning and tearing down its own child process on top of the same rlimit, UID-drop, and timeout machinery.">
+    <div class="diagram-top">
+      <div class="node node-iface" id="node-execute">
+        <span class="node-title">execute(code)</span>
+        <span class="node-sub">→ JSON return value + artifacts</span>
+      </div>
+      <div class="node node-iface" id="node-runprocess">
+        <span class="node-title">run_process(argv)</span>
+        <span class="node-sub">→ exit code + stdout/stderr</span>
+      </div>
+    </div>
+    <div class="connectors">
+      <span class="connector"><span class="line"></span><span class="pulse pulse-a"></span></span>
+      <span class="connector"><span class="line"></span><span class="pulse pulse-b"></span></span>
+    </div>
+    <div class="node node-base">
+      <span class="node-title">one shared skeleton</span>
+      <span class="node-sub">fresh process group per call · rlimits · uid drop · timeout-kill · subreaper reaping · bounded &amp; hashed output</span>
+    </div>
+    <figcaption>one supervised child per call, two shapes for how it talks back — deliberately not merged into one generic function</figcaption>
+  </figure>
 
   <div class="thesis">
     <strong>Not a hostile-code sandbox.</strong> The container around this
