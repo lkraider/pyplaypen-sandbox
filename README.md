@@ -32,6 +32,27 @@ that:
   enforced vs. best-effort vs. unsupported on the current platform (see
   `_enforcement_map` in `supervisor.py`)
 
+## For coding agents
+
+This repo is meant to be adapted, not just vendored in as-is — see
+"Extending it" and "Lower-level building blocks" below for the actual
+decision points (`execute()` vs. `run_process()`, whether a
+`globals_provider`/`type_projector` is warranted, what `Limits` fit the
+workload). An agent wiring this in should read those sections and write
+the integration a project actually needs, not copy the examples verbatim.
+
+Copy-paste to a coding agent, for a project integration:
+
+> Set up a process sandbox in this project using
+> https://github.com/lkraider/pyplaypen-sandbox. Read the README fully
+> first, then decide the integration this project needs — don't just
+> paste its examples.
+
+Or for a single one-off call:
+
+> Use https://github.com/lkraider/pyplaypen-sandbox to run this Python
+> snippet in an isolated subprocess and return the result: `<code>`
+
 ## Install
 
 ```
