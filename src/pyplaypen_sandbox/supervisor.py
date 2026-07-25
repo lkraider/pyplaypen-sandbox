@@ -281,7 +281,7 @@ class Sandbox:
                 await asyncio.wait_for(self._semaphore.acquire(), timeout=limits.wall_seconds)
                 acquired = True
                 queue_ms = (time.monotonic() - started) * 1000.0
-            except TimeoutError:
+            except (asyncio.TimeoutError, TimeoutError):
                 queue_ms = (time.monotonic() - started) * 1000.0
                 result = _error("busy", "concurrency slot was unavailable before the wall deadline")
                 return result
@@ -376,7 +376,7 @@ class Sandbox:
                     if remaining <= 0:
                         raise TimeoutError
                     frame_tuple = await asyncio.wait_for(asyncio.shield(result_task), timeout=remaining)
-                except TimeoutError:
+                except (asyncio.TimeoutError, TimeoutError):
                     await self._terminate_process_group(proc)
                     stdout_data, stdout_total, stdout_hash = await stdout_task
                     _stderr_data, stderr_total, stderr_hash = await stderr_task
@@ -494,7 +494,7 @@ class Sandbox:
                 await asyncio.wait_for(self._semaphore.acquire(), timeout=limits.wall_seconds)
                 acquired = True
                 queue_ms = (time.monotonic() - started) * 1000.0
-            except TimeoutError:
+            except (asyncio.TimeoutError, TimeoutError):
                 queue_ms = (time.monotonic() - started) * 1000.0
                 result["status"] = "busy"
                 return result
@@ -543,7 +543,7 @@ class Sandbox:
                     if remaining <= 0:
                         raise TimeoutError
                     await asyncio.wait_for(asyncio.shield(proc.wait()), timeout=remaining)
-                except TimeoutError:
+                except (asyncio.TimeoutError, TimeoutError):
                     await self._terminate_process_group(proc)
                     stdout_data, stdout_total, stdout_hash = await stdout_task
                     stderr_data, stderr_total, stderr_hash = await stderr_task
@@ -613,7 +613,7 @@ class Sandbox:
         # and falls through to the signal below, unaffected.
         try:
             await asyncio.wait_for(proc.wait(), timeout=0.1)
-        except TimeoutError:
+        except (asyncio.TimeoutError, TimeoutError):
             pass
         try:
             os.killpg(proc.pid, signal.SIGTERM)
