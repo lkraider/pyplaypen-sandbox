@@ -80,7 +80,7 @@ result = await sandbox.execute(
 
 `error.type` is one of: `syntax`, `runtime`, `serialization`, `timeout`,
 `memory_limit`, `process_limit`, `artifact_limit`, `return_limit`, `busy`,
-`cancelled`, `crash`, `protocol`, `internal`.
+`cancelled`, `crash`, `protocol`, `internal`, `extension`.
 
 ## Extending it
 
