@@ -185,19 +185,22 @@
      the interface reaches into the shared mechanism, not the other way
      round), pauses while the child does its work, then travels back up
      with the result. A soft glow marks arrival, and fades. */
+  /* top values stop at calc(100% - dot diameter) so the dot's own body
+     never crosses the boundary into node-base — it touches the edge and
+     turns back, rather than visually entering the box. */
   @keyframes travel-a {
     0%, 4%   { opacity: 0.35; top: 0%; }
     10%      { opacity: 1;    top: 0%; }
-    26%      { opacity: 1;    top: 100%; }
-    34%      { opacity: 1;    top: 100%; }
+    26%      { opacity: 1;    top: calc(100% - 6px); }
+    34%      { opacity: 1;    top: calc(100% - 6px); }
     50%      { opacity: 1;    top: 0%; }
     58%, 100% { opacity: 0.35; top: 0%; }
   }
   @keyframes travel-b {
     0%, 54%  { opacity: 0.35; top: 0%; }
     60%      { opacity: 1;    top: 0%; }
-    76%      { opacity: 1;    top: 100%; }
-    84%      { opacity: 1;    top: 100%; }
+    76%      { opacity: 1;    top: calc(100% - 6px); }
+    84%      { opacity: 1;    top: calc(100% - 6px); }
     100%     { opacity: 1;    top: 0%; }
   }
   @keyframes glow-base-a {
