@@ -194,10 +194,3 @@ this is the whole ask — no need to adopt the rest of the library.
 the wall-clock timeout and process-group teardown still apply everywhere).
 Root-UID drop is a no-op if the parent isn't running as root.
 
-## Origin
-
-Extracted from a pattern used in two internal projects (`dify-skill-wrapper`
-and a Redash pipelines worker) that independently converged on the same
-one-shot-subprocess design. This is the generalized core, with the
-app-specific helpers (CSV/query/report-building globals injected into the
-child) stripped out.
