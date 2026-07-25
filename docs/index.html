@@ -98,10 +98,10 @@
   }
   .diagram-top, .connectors {
     display: flex;
-    gap: clamp(1rem, 5vw, 2.5rem);
+    gap: clamp(0.75rem, 4vw, 2.5rem);
   }
   .node-iface, .connector {
-    width: clamp(6.5rem, 24vw, 11rem);
+    width: clamp(8.75rem, 27vw, 11.5rem);
   }
   .node {
     border-radius: 6px;
@@ -130,6 +130,7 @@
     font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
     font-size: 0.82em;
     font-weight: 600;
+    overflow-wrap: break-word;
   }
   .node-sub {
     display: block;
@@ -251,11 +252,11 @@
   <figure class="diagram" aria-label="Diagram: two permanent interfaces, execute() and run_process(), each reaching down into one shared supervision skeleton to run a call, then returning a result back up. Hover or focus a box to pause its cycle.">
     <div class="diagram-top">
       <div class="node node-iface" id="node-execute" tabindex="0">
-        <span class="node-title">execute(code)</span>
+        <span class="node-title">execute(<wbr>code)</span>
         <span class="node-sub">→ JSON return value + artifacts</span>
       </div>
       <div class="node node-iface" id="node-runprocess" tabindex="0">
-        <span class="node-title">run_process(executable)</span>
+        <span class="node-title">run_process(<wbr>executable)</span>
         <span class="node-sub">→ exit code + stdout/stderr</span>
       </div>
     </div>
