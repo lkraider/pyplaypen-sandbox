@@ -1,0 +1,58 @@
+"""POSIX rlimit application and real UID drop — the two primitives behind
+every guarantee this library makes. Public and dependency-free on purpose:
+call apply_resource_limits() then drop_root_privileges() inside any child
+(a preexec_fn, a bootstrap script, whatever) to get the same confinement
+without adopting Sandbox at all.
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+from typing import Any, Mapping
+
+RUNTIME_HOME = Path("/run/pyplaypen-sandbox")
+
+
+def apply_resource_limits(limits: Mapping[str, Any]) -> None:
+    """Set RLIMIT_CPU/RLIMIT_FSIZE everywhere POSIX, RLIMIT_AS/RLIMIT_NPROC
+    on Linux only (unsupported elsewhere). Call before drop_root_privileges,
+    and before running anything caller-supplied. Requires
+    limits['cpu_seconds'], ['file_bytes'], ['memory_bytes'], ['process_count'].
+    """
+    try:
+        import resource
+    except ImportError:
+        return
+
+    def apply(name: str, soft: int, hard: int | None = None) -> None:
+        resource_name = getattr(resource, name, None)
+        if resource_name is None:
+            return
+        resource.setrlimit(resource_name, (soft, soft if hard is None else hard))
+
+    apply("RLIMIT_CPU", int(limits["cpu_seconds"]), int(limits["cpu_seconds"]) + 1)
+    # Permit one sentinel byte so a short write caused by RLIMIT_FSIZE is
+    # detectable by a post-run configured-size check.
+    apply("RLIMIT_FSIZE", int(limits["file_bytes"]) + 1)
+    if sys.platform.startswith("linux"):
+        apply("RLIMIT_AS", int(limits["memory_bytes"]))
+        apply("RLIMIT_NPROC", int(limits["process_count"]))
+
+
+def drop_root_privileges(uid: int) -> None:
+    """No-op unless running as root. Linux exempts root from RLIMIT_NPROC,
+    so this is what makes that limit real. Sets HOME to a dedicated,
+    uid-owned directory (RUNTIME_HOME) since the original HOME is usually
+    root's and unreadable by the dropped uid; leaves everything else in the
+    environment alone.
+    """
+    if not hasattr(os, "geteuid") or os.geteuid() != 0:
+        return
+    RUNTIME_HOME.mkdir(mode=0o700, exist_ok=True)
+    os.chown(RUNTIME_HOME, uid, uid)
+    os.environ["HOME"] = str(RUNTIME_HOME)
+    os.setgroups([])
+    os.setgid(uid)
+    os.setuid(uid)

@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from ._artifacts import ArtifactError, scan
+from .privilege import apply_resource_limits, drop_root_privileges
 
 PROTOCOL_VERSION = 1
 MAX_PROJECTION_DEPTH = 50
@@ -119,42 +120,6 @@ def _provisional_artifacts(workspace: Path, artifact_root: Path, limits: dict[st
     return artifacts, translations
 
 
-def _apply_resource_limits(limits: dict[str, Any]) -> None:
-    try:
-        import resource
-    except ImportError:
-        return
-
-    def apply(name: str, soft: int, hard: int | None = None) -> None:
-        resource_name = getattr(resource, name, None)
-        if resource_name is None:
-            return
-        resource.setrlimit(resource_name, (soft, soft if hard is None else hard))
-
-    apply("RLIMIT_CPU", int(limits["cpu_seconds"]), int(limits["cpu_seconds"]) + 1)
-    # Permit one sentinel byte so a short write caused by RLIMIT_FSIZE is
-    # detectable by the post-run configured-size check.
-    apply("RLIMIT_FSIZE", int(limits["file_bytes"]) + 1)
-    if sys.platform.startswith("linux"):
-        apply("RLIMIT_AS", int(limits["memory_bytes"]))
-        apply("RLIMIT_NPROC", int(limits["process_count"]))
-
-
-def _drop_root_privileges(uid: int) -> None:
-    """Use a dedicated real UID so Linux process limits apply to sandboxed
-    code (Linux exempts root from RLIMIT_NPROC)."""
-    if not hasattr(os, "geteuid") or os.geteuid() != 0:
-        return
-    runtime_home = Path("/run/pyplaypen-sandbox")
-    runtime_home.mkdir(mode=0o700, exist_ok=True)
-    os.chown(runtime_home, uid, uid)
-    os.environ["HOME"] = str(runtime_home)
-    os.environ["MPLCONFIGDIR"] = str(runtime_home / "matplotlib")
-    os.setgroups([])
-    os.setgid(uid)
-    os.setuid(uid)
-
-
 def _load_globals(provider_path: str, ctx: dict[str, Any]) -> dict[str, Any]:
     """Import 'module:function', call it with a JSON-safe context, and merge
     the returned dict into the exec namespace. Runs in the child, after the
@@ -200,11 +165,8 @@ def _run(payload: dict[str, Any]) -> dict[str, Any]:
     if workspace.parts[: len(artifact_root.parts)] != artifact_root.parts:
         return _error("internal", "workspace is outside the artifact root")
 
-    _apply_resource_limits(limits)
-    _drop_root_privileges(int(context["uid"]))
-    os.environ["MPLBACKEND"] = "Agg"
-    for name in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
-        os.environ.setdefault(name, "1")
+    apply_resource_limits(limits)
+    drop_root_privileges(int(context["uid"]))
     os.chdir(workspace)
     globals_map: dict[str, Any] = {"__name__": "__sandbox_code__", "__builtins__": builtins.__dict__}
     provider_path = context.get("globals_provider")
