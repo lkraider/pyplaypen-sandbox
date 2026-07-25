@@ -38,7 +38,14 @@ def apply_resource_limits(limits: Mapping[str, Any]) -> None:
     apply("RLIMIT_FSIZE", int(limits["file_bytes"]) + 1)
     if sys.platform.startswith("linux"):
         apply("RLIMIT_AS", int(limits["memory_bytes"]))
-        apply("RLIMIT_NPROC", int(limits["process_count"]))
+        # RLIMIT_NPROC is per real UID, system-wide, not per process group.
+        # It's only safe to set when this process is about to drop to its
+        # own dedicated UID (see drop_root_privileges): only then does the
+        # limit bound this call's own process count. Applied while still
+        # sharing the ambient UID, it would cap every other process already
+        # running as that UID, sandboxed or not.
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            apply("RLIMIT_NPROC", int(limits["process_count"]))
 
 
 def drop_root_privileges(uid: int) -> None:

@@ -157,15 +157,19 @@ def _parse_frame(data: bytes, oversized: bool) -> dict[str, Any]:
 def _enforcement_map() -> dict[str, str]:
     """What's actually enforced per limit, on this platform, right now.
 
-    Computed once at import time — enforcement depends only on the
-    platform, which cannot change while the process is running.
+    Computed once at import time — enforcement depends on the platform and
+    on whether this process is root, neither of which changes at runtime.
     """
     linux = sys.platform.startswith("linux")
+    is_root = hasattr(os, "geteuid") and os.geteuid() == 0
     return {
         "wall_seconds": "hard",
         "cpu_seconds": "hard_per_process" if os.name == "posix" else "unsupported",
         "memory_bytes": "best_effort_per_process" if linux else "unsupported",
-        "process_count": "hard_per_user" if linux else "unsupported",
+        # Per real UID, system-wide, not per call — only applied when this
+        # process is root and about to drop to its own dedicated UID.
+        # Otherwise it would cap every process sharing the ambient UID.
+        "process_count": "hard_per_user" if linux and is_root else "unsupported",
         "stdout_bytes": "hard_retained",
         "stderr_bytes": "hard_retained",
         "return_value_bytes": "hard",
@@ -289,16 +293,25 @@ class Sandbox:
 
             artifact_root = context.artifact_root.resolve()
             artifact_root.mkdir(parents=True, exist_ok=True)
-            workspace = artifact_root / "sandbox-runs" / context.request_id
-            workspace.mkdir(parents=True, mode=0o700, exist_ok=False)
+            runs_dir = artifact_root / "sandbox-runs"
+            runs_dir.mkdir(exist_ok=True)
+            workspace = runs_dir / context.request_id
+            workspace.mkdir(mode=0o700, exist_ok=False)
             resolved_workspace = workspace.resolve()
             if resolved_workspace.parts[: len(artifact_root.parts)] != artifact_root.parts:
                 raise RuntimeError("call workspace escaped artifact root")
             workspace = resolved_workspace
             # The parent may remain root for bind-mounted artifact compatibility;
             # the child uses a dedicated real UID so RLIMIT_NPROC is enforceable
-            # (Linux exempts root from that limit).
+            # (Linux exempts root from that limit). That UID also needs to
+            # traverse down to its own workspace, so artifact_root and the
+            # shared runs_dir need at least the execute bit for "other" —
+            # granting traversal, not read access to their other contents —
+            # since either can pre-exist with restrictive permissions (e.g.
+            # tempfile.TemporaryDirectory defaults to 0700).
             if hasattr(os, "geteuid") and os.geteuid() == 0:
+                for directory in (artifact_root, runs_dir):
+                    os.chmod(directory, directory.stat().st_mode | 0o111)
                 os.chown(workspace, self.child_uid, self.child_uid)
 
             payload = {
@@ -592,6 +605,16 @@ class Sandbox:
             except PermissionError:
                 return True
 
+        # The leader may already be exiting on its own (e.g. it just closed
+        # the result pipe on the success path) — its own exit is what
+        # flushes its own stdio buffers. Give it a brief moment to finish
+        # naturally before signaling the group; signaling too early can cut
+        # that flush short. A genuinely stuck process just times out here
+        # and falls through to the signal below, unaffected.
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=0.1)
+        except TimeoutError:
+            pass
         try:
             os.killpg(proc.pid, signal.SIGTERM)
         except ProcessLookupError:

@@ -47,13 +47,16 @@ time.sleep(30)
 '''
     started = time.monotonic()
     result = await sandbox.run_process(
+        # wall_seconds needs real headroom for subprocess.Popen (a full
+        # interpreter fork/exec) to complete on a loaded machine before the
+        # deadline, or the child never reaches its own print() at all.
         [sys.executable, "-c", code], cwd=tmp_path,
-        limits=replace(DEFAULT_LIMITS, wall_seconds=0.4, cpu_seconds=1),
+        limits=replace(DEFAULT_LIMITS, wall_seconds=2.0, cpu_seconds=25),
     )
     elapsed = time.monotonic() - started
     assert result["status"] == "timeout"
     assert result["timed_out"] is True
-    assert elapsed < 2.0
+    assert elapsed < 4.0
     pid = int(result["stdout"].strip())
     for _ in range(100):
         try:

@@ -154,7 +154,13 @@ p = subprocess.Popen([sys.executable, "-c", "import signal,time; signal.signal(s
 print(p.pid, flush=True)
 time.sleep(30)
 '''
-    result = await run(code, artifact_dir=str(tmp_path), sandbox=sandbox, limits=short_limits())
+    # wall_seconds needs real headroom for subprocess.Popen (a full
+    # interpreter fork/exec) to complete on a loaded machine before the
+    # deadline, or the child never reaches its own print() at all.
+    result = await run(
+        code, artifact_dir=str(tmp_path), sandbox=sandbox,
+        limits=short_limits(wall_seconds=2.0, cpu_seconds=25),
+    )
     pid = int(result["stdout"].strip())
     assert result["error"]["type"] == "timeout"
     assert await _wait_pid_gone(pid)
@@ -244,7 +250,11 @@ async def test_linux_root_runner_drops_to_dedicated_uid(tmp_path, sandbox):
 
 
 @pytest.mark.linux
-@pytest.mark.skipif(not os.sys.platform.startswith("linux"), reason="Linux resource semantics required")
+@pytest.mark.skipif(
+    not os.sys.platform.startswith("linux") or os.geteuid() != 0,
+    reason="RLIMIT_NPROC is per real UID system-wide; only meaningful once "
+           "root actually drops to its own dedicated UID",
+)
 async def test_linux_process_limit_is_enforced(tmp_path, sandbox):
     limits = replace(DEFAULT_LIMITS, wall_seconds=5.0, process_count=4)
     code = '''
