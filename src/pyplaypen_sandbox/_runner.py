@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import ast
 import builtins
+import importlib
 import json
 import math
 import os
@@ -156,6 +157,23 @@ def _drop_root_privileges(uid: int) -> None:
     os.setuid(uid)
 
 
+def _load_globals(provider_path: str, ctx: dict[str, Any]) -> dict[str, Any]:
+    """Import 'module:function', call it with a JSON-safe context, and merge
+    the returned dict into the exec namespace. Runs in the child, after the
+    privilege drop, so an extension gets no more trust than user code — it
+    just gets to add names (numpy, pandas, an HTTP client, whatever the
+    caller's own module imports) that this library never has to depend on.
+    """
+    module_name, _, func_name = provider_path.partition(":")
+    if not func_name:
+        raise ValueError("globals_provider must be 'module:function'")
+    provider = getattr(importlib.import_module(module_name), func_name)
+    result = provider(ctx)
+    if not isinstance(result, dict) or not all(isinstance(key, str) for key in result):
+        raise ValueError("globals_provider must return a dict[str, Any]")
+    return result
+
+
 def _error(error_type: str, message: str) -> dict[str, Any]:
     return {
         "protocol_version": PROTOCOL_VERSION,
@@ -191,6 +209,17 @@ def _run(payload: dict[str, Any]) -> dict[str, Any]:
         os.environ.setdefault(name, "1")
     os.chdir(workspace)
     globals_map: dict[str, Any] = {"__name__": "__sandbox_code__", "__builtins__": builtins.__dict__}
+    provider_path = context.get("globals_provider")
+    if provider_path:
+        try:
+            globals_map.update(_load_globals(provider_path, {
+                "request_id": context["request_id"],
+                "workspace": str(workspace),
+                "artifact_root": str(artifact_root),
+                "extra": context.get("extra", {}),
+            }))
+        except Exception as exc:
+            return _error("extension", f"globals_provider failed: {type(exc).__name__}: {exc}")
     try:
         tree = ast.parse(payload["code"], filename="<sandbox_code>", mode="exec")
     except SyntaxError as exc:
@@ -242,7 +271,15 @@ def _write_frame(fd: int, payload: dict[str, Any]) -> None:
         stream.flush()
 
 
-def _self_check() -> int:
+def _self_check(provider_path: str | None) -> int:
+    if provider_path:
+        module_name, _, func_name = provider_path.partition(":")
+        try:
+            if not func_name or not hasattr(importlib.import_module(module_name), func_name):
+                raise ImportError(f"{func_name!r} not found in {module_name!r}")
+        except Exception as exc:
+            print(json.dumps({"status": "error", "message": f"globals_provider: {exc}"}, separators=(",", ":")))
+            return 1
     print(json.dumps({"status": "ok", "python": sys.version.split()[0]}, separators=(",", ":")))
     return 0
 
@@ -251,9 +288,10 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--result-fd", type=int)
     parser.add_argument("--self-check", action="store_true")
+    parser.add_argument("--globals-provider")
     args = parser.parse_args()
     if args.self_check:
-        return _self_check()
+        return _self_check(args.globals_provider)
     if args.result_fd is None:
         parser.error("--result-fd is required")
     try:

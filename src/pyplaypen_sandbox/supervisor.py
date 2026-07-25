@@ -48,6 +48,9 @@ class Context:
     artifact_root: Path
     request_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     env: Mapping[str, str] = field(default_factory=lambda: dict(os.environ))
+    # Opaque, JSON-serializable, call-scoped config for Sandbox's globals_provider.
+    # This library never reads it — it exists only for the caller's extension.
+    extra: Mapping[str, Any] = field(default_factory=dict)
 
 
 def _bounded_fd_read(fd: int, cap: int) -> tuple[bytes, int, bool]:
@@ -180,15 +183,17 @@ class Sandbox:
         self_check: bool = True,
         child_uid: int = 65534,
         child_env: Mapping[str, str] | None = None,
+        globals_provider: str | None = None,
     ) -> None:
         if not 1 <= max_concurrency <= 32:
             raise ValueError("max_concurrency must be between 1 and 32")
         self.max_concurrency = max_concurrency
         self.child_uid = child_uid
+        self.globals_provider = globals_provider
         self._subreaper_enabled = self._enable_subreaper()
         self._semaphore = asyncio.Semaphore(max_concurrency)
         if self_check:
-            self._run_self_check(startup_timeout, child_env)
+            self._run_self_check(startup_timeout, child_env, globals_provider)
 
     @staticmethod
     def _enable_subreaper() -> bool:
@@ -205,24 +210,24 @@ class Sandbox:
             return False
 
     @staticmethod
-    def _run_self_check(timeout: float, child_env: Mapping[str, str] | None) -> None:
+    def _run_self_check(timeout: float, child_env: Mapping[str, str] | None, globals_provider: str | None) -> None:
         env = dict(os.environ if child_env is None else child_env)
+        argv = [sys.executable, "-m", "pyplaypen_sandbox._runner", "--self-check"]
+        if globals_provider:
+            argv += ["--globals-provider", globals_provider]
         try:
             result = subprocess.run(
-                [sys.executable, "-m", "pyplaypen_sandbox._runner", "--self-check"],
-                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 text=True, env=env, timeout=timeout, check=False,
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise RuntimeError(f"sandbox self-check unavailable: {exc}") from exc
-        if result.returncode != 0:
-            detail = result.stderr.strip().splitlines()[-1] if result.stderr.strip() else "unknown import error"
-            raise RuntimeError(f"sandbox self-check failed: {detail}")
         try:
-            if json.loads(result.stdout).get("status") != "ok":
-                raise RuntimeError("sandbox self-check did not report success")
+            payload = json.loads(result.stdout)
         except json.JSONDecodeError as exc:
-            raise RuntimeError("sandbox self-check returned invalid output") from exc
+            raise RuntimeError(f"sandbox self-check returned invalid output: {result.stderr.strip()[:200]}") from exc
+        if payload.get("status") != "ok":
+            raise RuntimeError(f"sandbox self-check failed: {payload.get('message', 'unknown error')}")
 
     async def execute(self, code: str, context: Context, limits: Limits = DEFAULT_LIMITS) -> dict[str, Any]:
         started = time.monotonic()
@@ -271,6 +276,8 @@ class Sandbox:
                     "artifact_root": str(artifact_root),
                     "workspace": str(workspace),
                     "uid": self.child_uid,
+                    "globals_provider": self.globals_provider,
+                    "extra": dict(context.extra),
                 },
                 "limits": dataclasses.asdict(limits),
             }

@@ -83,6 +83,38 @@ result = await sandbox.execute(
 `memory_limit`, `process_limit`, `artifact_limit`, `return_limit`, `busy`,
 `cancelled`, `crash`, `protocol`, `internal`.
 
+## Extending it
+
+This library makes no assumption about what sandboxed code needs — no
+numpy/pandas/httpx/duckdb dependency, no built-in helpers. If you want
+sandboxed code to call out to something (an HTTP client, a query engine,
+whatever), give `Sandbox` an import path to a factory function. It runs
+*inside* the child, after the privilege drop, so an extension is bound by
+the same rlimits as user code and never has to be a dependency of this
+package — its own imports live in your module, not ours.
+
+```python
+# yourpkg/sandbox_ext.py
+def build_globals(ctx: dict) -> dict:
+    import httpx  # your dependency, not pyplaypen_sandbox's
+    def fetch(url: str) -> str:
+        return httpx.get(url, timeout=ctx["extra"]["timeout"]).text
+    return {"fetch": fetch}
+```
+
+```python
+sandbox = Sandbox(globals_provider="yourpkg.sandbox_ext:build_globals")
+context = Context(artifact_root=Path("./artifacts"), extra={"timeout": 5.0})
+result = await sandbox.execute('fetch("https://example.com")', context)
+```
+
+`ctx` is `{"request_id", "workspace", "artifact_root", "extra"}` — `extra`
+is whatever JSON-serializable config you passed on `Context`; this library
+never reads it. A bad provider (missing module, wrong return type) fails as
+`error.type == "extension"`, distinct from user-code errors, and — if
+`self_check=True` (the default) — is caught at `Sandbox()` construction
+time rather than on first call.
+
 ## Platform notes
 
 `RLIMIT_AS` and `RLIMIT_NPROC` are Linux-only (not enforced on macOS/BSD —
