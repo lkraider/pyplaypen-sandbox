@@ -188,6 +188,33 @@ supervision and just want real rlimits and a real UID drop (the thing that
 actually makes `RLIMIT_NPROC` bind on Linux, where root is exempt from it),
 this is the whole ask — no need to adopt the rest of the library.
 
+## Compared to restricted-interpreter sandboxes (e.g. Monty)
+
+Pydantic's [Monty](https://github.com/pydantic/monty) takes a different
+approach worth naming explicitly: it runs code **in-process**, as a
+restricted Python-subset interpreter — sandboxed code can only call what
+you explicitly inject as external functions, so there's no `import os`,
+no ambient filesystem/network access, no arbitrary pip packages, because
+the interpreter itself doesn't support that surface. Its resource limits
+(allocation count, duration, memory) are counters inside its own runtime,
+not kernel `rlimit`s — there's no process boundary at all.
+
+That's a different sandboxing *strategy*, not a lighter version of this
+one. Prefer pyplaypen-sandbox when the code needs real CPython (numpy,
+pandas, any pip package, legitimately spawning subprocesses) or you want
+actual kernel-enforced limits (wall-clock kill of a whole process tree,
+real `RLIMIT_NPROC`/`RLIMIT_AS`, real UID drop) rather than an
+interpreter's internal bookkeeping, which can't see what a C extension or
+an injected function does with its own memory or subprocesses. Prefer a
+restricted interpreter like Monty when call volume/latency matters (no
+subprocess-per-call cost), the workload is bounded to a small fixed set
+of host capabilities rather than open-ended generated code, or the threat
+model is closer to untrusted input than your own automation and you lack
+strong per-tenant container isolation underneath — a restricted language
+is a stronger standalone claim than "full CPython, isolated a bit more,
+but the container is still the real boundary," which is explicitly not
+what this library claims to be.
+
 ## Platform notes
 
 `RLIMIT_AS` and `RLIMIT_NPROC` are Linux-only (not enforced on macOS/BSD —
