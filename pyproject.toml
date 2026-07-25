@@ -30,7 +30,7 @@ classifiers = [
 dependencies = []
 
 [project.urls]
-Homepage = "https://github.com/lkraider/pyplaypen-sandbox"
+Homepage = "https://lkraider.github.io/pyplaypen-sandbox/"
 Repository = "https://github.com/lkraider/pyplaypen-sandbox"
 Issues = "https://github.com/lkraider/pyplaypen-sandbox/issues"
 
