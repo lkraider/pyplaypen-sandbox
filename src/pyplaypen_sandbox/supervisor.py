@@ -43,6 +43,11 @@ class Limits:
 DEFAULT_LIMITS = Limits()
 
 
+# This dataclass, the "context" dict in the wire payload built below (adds
+# workspace/uid/globals_provider), and the ctx dict _runner.py hands to a
+# globals_provider (drops env/uid, adds nothing back) are three different
+# shapes sharing one name across files — don't assume one where you see
+# another.
 @dataclass(frozen=True)
 class Context:
     artifact_root: Path
@@ -181,6 +186,9 @@ class Sandbox:
     as defense in depth, not isolation.
     """
 
+    # Versions this class's own audit-log shape, not a Limits instance —
+    # bump it if the fields in _audit's record change, not when a caller
+    # tunes a Limits value.
     policy_version = "v1"
 
     def __init__(
