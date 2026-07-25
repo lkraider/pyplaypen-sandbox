@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pyplaypen-sandbox</title>
+<meta name="description" content="One-shot subprocess sandbox for running Python inside a container: process-group isolation, POSIX rlimits, UID drop, bounded I/O, artifact capture.">
+<style>
+  :root {
+    --ink: #1a1a1a;
+    --muted: #5b5b5b;
+    --rule: #d8d8d4;
+    --paper: #fbfaf8;
+    --code-bg: #f0efeb;
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: ui-serif, Georgia, "Iowan Old Style", "Times New Roman", serif;
+    font-size: clamp(17px, 1.1vw + 12px, 19px);
+    line-height: 1.65;
+  }
+  main {
+    max-width: 40rem;
+    margin: 0 auto;
+    padding: clamp(2.5rem, 8vw, 6rem) 1.5rem 4rem;
+  }
+  h1 {
+    font-size: clamp(2rem, 5vw, 2.6rem);
+    font-weight: 600;
+    margin: 0 0 0.3em;
+    letter-spacing: -0.01em;
+  }
+  .lede {
+    font-size: 1.2em;
+    color: var(--muted);
+    margin: 0 0 2.2em;
+  }
+  .thesis {
+    font-size: 1.08em;
+    line-height: 1.7;
+    padding: 0 0 0 1.1em;
+    border-left: 2px solid var(--rule);
+    margin: 2.4em 0;
+  }
+  .thesis strong { font-weight: 600; }
+  h2 {
+    font-size: 1.05em;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    margin: 2.6em 0 0.9em;
+  }
+  p { margin: 0.9em 0; }
+  ul { margin: 0.9em 0; padding-left: 1.3em; }
+  li { margin: 0.45em 0; }
+  a { color: var(--ink); text-decoration-thickness: 1px; text-underline-offset: 0.15em; }
+  a:hover { color: var(--muted); }
+  code {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.88em;
+    background: var(--code-bg);
+    padding: 0.1em 0.35em;
+    border-radius: 3px;
+  }
+  pre {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.86em;
+    line-height: 1.6;
+    background: var(--code-bg);
+    padding: 1em 1.1em;
+    border-radius: 5px;
+    overflow-x: auto;
+    margin: 1em 0;
+  }
+  pre code { background: none; padding: 0; }
+  hr {
+    border: none;
+    border-top: 1px solid var(--rule);
+    margin: 3em 0;
+  }
+  footer {
+    color: var(--muted);
+    font-size: 0.92em;
+  }
+  footer p { margin: 0.5em 0; }
+  .links a { margin-right: 1.2em; white-space: nowrap; }
+</style>
+</head>
+<body>
+<main>
+
+  <h1>pyplaypen-sandbox</h1>
+  <p class="lede">One-shot subprocess sandbox for running Python inside a container.</p>
+
+  <div class="thesis">
+    <strong>Not a hostile-code sandbox.</strong> The container around this
+    process is the accepted trust boundary. This library is defense in
+    depth <em>inside</em> that boundary — it does not claim to hold against
+    code that specifically tries to escape it. If you need that, use
+    gVisor, Firecracker, or a VM, not this.
+  </div>
+
+  <h2>What it enforces</h2>
+  <p>Every call forks a fresh child, in its own process group, that:</p>
+  <ul>
+    <li>runs under a wall-clock timeout that kills the whole process group, not just the child, so background descendants can't outlive the call</li>
+    <li>applies POSIX rlimits pre-exec — CPU seconds, memory, process count, max file size</li>
+    <li>drops from root to a dedicated non-root UID (Linux exempts root from <code>RLIMIT_NPROC</code>, so this is what makes it real)</li>
+    <li>reaps orphaned grandchildren after teardown, via <code>PR_SET_CHILD_SUBREAPER</code> on Linux</li>
+    <li>captures stdout/stderr bounded and SHA-256-hashed, and returns the final expression as JSON</li>
+    <li>collects workspace files as artifacts, rejecting symlinks and anything that would escape it</li>
+    <li>logs a structured audit record naming exactly what was enforced vs. best-effort vs. unsupported on the current platform</li>
+  </ul>
+
+  <h2>Install</h2>
+  <pre><code>pip install pyplaypen-sandbox</code></pre>
+  <p>No required dependencies, and none optional either.</p>
+
+  <pre><code>from pyplaypen_sandbox import run
+
+result = await run("1 + 1", artifact_dir="./artifacts")
+# {"status": "ok", "return_value": 2, ...}</code></pre>
+
+  <h2>One hook, not a library of assumptions</h2>
+  <p>
+    Nothing about numpy, pandas, httpx, or any other library is built in.
+    If sandboxed code needs to call out to something, or return a type this
+    library doesn't know, you give <code>Sandbox</code> an import path to a
+    plain function — <code>globals_provider</code> for what code can call,
+    <code>type_projector</code> for what it can return. Both run inside the
+    child, bound by the same rlimits as everything else. numpy/pandas
+    support ships as the worked example of this exact mechanism, not a
+    special case.
+  </p>
+
+  <h2>Lower-level, if that's what you need</h2>
+  <p>
+    <code>execute()</code> is one thing built on this library's guarantees,
+    not the only thing. <code>Sandbox.run_process(argv, cwd=...)</code> is
+    its argv-only twin — same isolation, no JSON protocol, for code that
+    already speaks in files and exit codes. And
+    <code>pyplaypen_sandbox.privilege</code> is the two functions
+    underneath both: real rlimits and a real UID drop, usable in a plain
+    <code>subprocess.Popen(preexec_fn=...)</code> without adopting anything
+    else here.
+  </p>
+
+  <h2>For coding agents</h2>
+  <p>This repo is meant to be adapted, not just vendored in as-is.</p>
+  <pre><code>Set up a process sandbox in this project using
+https://github.com/lkraider/pyplaypen-sandbox. Read the README fully
+first, then decide the integration this project needs — don't just
+paste its examples.</code></pre>
+
+  <hr>
+
+  <footer>
+    <p class="links">
+      <a href="https://github.com/lkraider/pyplaypen-sandbox">GitHub</a><a href="https://pypi.org/project/pyplaypen-sandbox/">PyPI</a><a href="https://github.com/lkraider/pyplaypen-sandbox#readme">Full README</a>
+    </p>
+    <p>MIT licensed.</p>
+  </footer>
+
+</main>
+</body>
+</html>
