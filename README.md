@@ -38,7 +38,8 @@ For a single one-off call:
 
 ```
 Use https://github.com/lkraider/pyplaypen-sandbox to run this Python
-snippet in an isolated subprocess and return the result: <code>
+snippet in an isolated subprocess, capped at 5 seconds of wall time and
+256 MB of memory, and return the result: <code>
 ```
 
 For a project integration, read "Extending it" and "Lower-level building
