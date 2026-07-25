@@ -62,6 +62,38 @@ async def test_workspaces_isolate_concurrent_identical_filenames(tmp_path):
     assert all((tmp_path / path).read_text() == "value" for path in paths)
 
 
+async def test_nested_artifact_paths_and_mime_types(tmp_path, sandbox):
+    code = '''
+from pathlib import Path
+files = {
+ "nested/data.csv": b"a\\n1\\n", "nested/page.html": b"<html></html>",
+ "nested/book.xlsx": b"xlsx", "nested/image.png": b"png",
+ "nested/vector.svg": b"<svg/>", "nested/data.json": b"{}",
+ "nested/data.parquet": b"parquet", "nested/document.pdf": b"pdf",
+}
+for name, body in files.items():
+    path = Path(name); path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes(body)
+"nested/data.csv"
+'''
+    result = await run(code, artifact_dir=str(tmp_path), sandbox=sandbox)
+    assert result["status"] == "ok"
+    assert result["return_value"].startswith("sandbox-runs/")
+    assert result["return_value"].endswith("nested/data.csv")
+    mime = {item["path"].rsplit("/", 1)[-1]: item["mime_type"] for item in result["artifacts"]}
+    assert mime == {
+        "book.xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "data.csv": "text/csv",
+        "data.json": "application/json",
+        "data.parquet": "application/parquet",
+        "document.pdf": "application/pdf",
+        "image.png": "image/png",
+        "page.html": "text/html",
+        "vector.svg": "image/svg+xml",
+    }
+    for item in result["artifacts"]:
+        assert (tmp_path / item["path"]).is_file()
+
+
 @pytest.mark.skipif(
     importlib.util.find_spec("numpy") is None or importlib.util.find_spec("pandas") is None,
     reason="numpy/pandas not installed; projection is exercised only when importable",
