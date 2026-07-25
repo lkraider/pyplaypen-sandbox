@@ -9,3 +9,4 @@
 - Prefer lower-level, minimal code — it's faster and has less surface area.
 - Tests must be fast and aggressive (try to break the code), never padded or slow for their own sake.
 - Reason from formal logic and evidence, not vibes or guesses.
+- Commit often, with good semantics: small logical units, messages that say why.
