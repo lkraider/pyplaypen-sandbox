@@ -63,3 +63,23 @@ async def test_data_string_matching_a_filename_is_not_rewritten(tmp_path, sandbo
     )
     assert result["status"] == "ok"
     assert result["return_value"]["label"] == "a.txt"
+
+
+# --- artifact boundary: hardlinks escape the workspace like symlinks do ---
+
+async def test_hardlink_to_outside_file_is_not_captured_as_an_artifact(tmp_path, sandbox):
+    """scan() rejects symlinks and claims to reject any path that escapes the
+    workspace. A hardlink is a path whose data lives outside the workspace,
+    so capturing it exfiltrates that content — the same escape a symlink
+    would, just harder to spot."""
+    secret = tmp_path / "secret.txt"
+    secret.write_text("TOPSECRET")
+    result = await run(
+        f'import os\nos.link({str(secret)!r}, "leak.txt")\n"leak.txt"',
+        artifact_dir=str(tmp_path), sandbox=sandbox,
+    )
+    if result["status"] == "ok":
+        captured = Path(tmp_path) / result["return_value"]
+        assert captured.read_text() != "TOPSECRET", "outside content exfiltrated via hardlink"
+    else:
+        assert result["error"]["type"] == "artifact_limit"

@@ -50,6 +50,12 @@ def scan(workspace: Path, artifact_root: Path, limits: Mapping[str, Any]) -> lis
             raise ArtifactError("symbolic links are not valid artifacts")
         if not path.is_file():
             continue
+        # A hardlink shares an inode with a file that may live outside the
+        # workspace, so its resolved path stays inside and passes the escape
+        # check below while its content escaped it. The workspace is created
+        # empty per call, so any extra link is one the child added.
+        if path.stat().st_nlink > 1:
+            raise ArtifactError("hard links are not valid artifacts")
         relative = path.relative_to(workspace)
         if any(part.startswith(".") for part in relative.parts):
             continue
