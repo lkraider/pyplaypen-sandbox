@@ -184,6 +184,7 @@ collecting output files, e.g. a fixed entrypoint script run per call:
 result = await sandbox.run_process(
     [sys.executable, "entrypoint.py"], cwd=workspace, limits=Limits(wall_seconds=60),
 )
+# or just as well: ["./entrypoint.sh"], ["/usr/bin/some-tool", "--flag"], ...
 # {"status": "ok" | "timeout" | "busy" | "cancelled" | "internal",
 #  "returncode": int | None, "timed_out": bool, "stdout": str, "stderr": str}
 ```
