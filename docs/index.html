@@ -267,15 +267,15 @@
       <span class="node-title">one shared skeleton</span>
       <span class="node-sub">fresh process group per call · rlimits · uid drop · timeout-kill · subreaper reaping · bounded &amp; hashed output</span>
     </div>
-    <figcaption>each interface reaches into the same shared skeleton and back — deliberately not merged into one generic function</figcaption>
+    <figcaption>each interface reaches into the same shared skeleton, does its work, and returns</figcaption>
   </figure>
 
   <div class="thesis">
     <strong>Not a hostile-code sandbox.</strong> The container around this
-    process is the accepted trust boundary. This library is defense in
-    depth <em>inside</em> that boundary — it does not claim to hold against
-    code that specifically tries to escape it. If you need that, use
-    gVisor, Firecracker, or a VM, not this.
+    process is the accepted trust boundary. This library adds defense in
+    depth inside that boundary; it does not hold against code that
+    deliberately tries to escape it. For that, use gVisor, Firecracker,
+    or a VM.
   </div>
 
   <h2>What it enforces</h2>
@@ -292,14 +292,14 @@
 
   <h2>Install</h2>
   <pre><code>pip install pyplaypen-sandbox</code></pre>
-  <p>No required dependencies, and none optional either.</p>
+  <p>No dependencies, required or optional.</p>
 
   <pre><code>from pyplaypen_sandbox import run
 
 result = await run("1 + 1", artifact_dir="./artifacts")
 # {"status": "ok", "return_value": 2, ...}</code></pre>
 
-  <h2>One hook, not a library of assumptions</h2>
+  <h2>The one hook</h2>
   <p>
     Nothing about numpy, pandas, httpx, or any other library is built in.
     If sandboxed code needs to call out to something, or return a type this
@@ -307,28 +307,25 @@ result = await run("1 + 1", artifact_dir="./artifacts")
     plain function — <code>globals_provider</code> for what code can call,
     <code>type_projector</code> for what it can return. Both run inside the
     child, bound by the same rlimits as everything else. numpy/pandas
-    support ships as the worked example of this exact mechanism, not a
-    special case.
+    support ships as the worked example of that mechanism.
   </p>
 
-  <h2>Lower-level, if that's what you need</h2>
+  <h2>Lower-level pieces</h2>
   <p>
-    <code>execute()</code> is one thing built on this library's guarantees,
-    not the only thing. <code>Sandbox.run_process(argv, cwd=...)</code> is
-    its argv-only twin — same isolation, no JSON protocol, for code that
-    already speaks in files and exit codes. And
-    <code>pyplaypen_sandbox.privilege</code> is the two functions
-    underneath both: real rlimits and a real UID drop, usable in a plain
-    <code>subprocess.Popen(preexec_fn=...)</code> without adopting anything
-    else here.
+    This library's guarantees don't stop at <code>execute()</code>.
+    <code>Sandbox.run_process(argv, cwd=...)</code> is its argv-only twin:
+    same isolation, no JSON protocol, for code that already speaks in files
+    and exit codes. And <code>pyplaypen_sandbox.privilege</code> is the two
+    functions underneath both: real rlimits and a real UID drop, usable in
+    a plain <code>subprocess.Popen(preexec_fn=...)</code> without adopting
+    anything else here.
   </p>
 
   <h2>For coding agents</h2>
-  <p>This repo is meant to be adapted, not just vendored in as-is.</p>
+  <p>This repo is meant to be adapted to a project's actual needs.</p>
   <pre><code>Set up a process sandbox in this project using
 https://github.com/lkraider/pyplaypen-sandbox. Read the README fully
-first, then decide the integration this project needs — don't just
-paste its examples.</code></pre>
+first, then decide the integration this project needs.</code></pre>
 
   <hr>
 

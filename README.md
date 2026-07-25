@@ -3,9 +3,9 @@
 One-shot subprocess sandbox for running Python inside a container.
 
 **Not a hostile-code sandbox.** The container around this process is the
-accepted trust boundary. This library is defense in depth *inside* that
-boundary — it does not claim to hold against code that specifically tries to
-escape it. If you need that, use gVisor/Firecracker/a VM, not this.
+accepted trust boundary. This library adds defense in depth inside that
+boundary; it does not hold against code that deliberately tries to escape
+it. For that, use gVisor, Firecracker, or a VM.
 
 ## What it does
 
@@ -41,20 +41,18 @@ Use https://github.com/lkraider/pyplaypen-sandbox to run this Python
 snippet in an isolated subprocess and return the result: <code>
 ```
 
-This repo is meant to be adapted, not just vendored in as-is — see
-"Extending it" and "Lower-level building blocks" below for the actual
-decision points (`execute()` vs. `run_process()`, whether a
-`globals_provider`/`type_projector` is warranted, what `Limits` fit the
-workload). An agent wiring this in should read those sections and write
-the integration a project actually needs, not copy the examples verbatim.
+For a project integration, read "Extending it" and "Lower-level building
+blocks" below first. The decision points are `execute()` vs.
+`run_process()`, whether a `globals_provider` or `type_projector` is
+warranted, and what `Limits` fit the workload. Write the integration the
+project needs instead of copying the examples verbatim.
 
 Copy-paste to a coding agent, for a project integration:
 
 ```
 Set up a process sandbox in this project using
 https://github.com/lkraider/pyplaypen-sandbox. Read the README fully
-first, then decide the integration this project needs — don't just
-paste its examples.
+first, then decide the integration this project needs.
 ```
 
 ## Install
@@ -63,8 +61,8 @@ paste its examples.
 pip install pyplaypen-sandbox
 ```
 
-No required dependencies, and none optional either — see `type_projector`
-below if you need numpy/pandas (or anything else) in return values.
+No dependencies, required or optional. See `type_projector` below if you
+need numpy/pandas, or anything else, in a return value.
 
 ## Usage
 
@@ -109,13 +107,12 @@ result = await sandbox.execute(
 
 ## Extending it
 
-This library makes no assumption about what sandboxed code needs — no
-numpy/pandas/httpx/duckdb dependency, no built-in helpers. If you want
-sandboxed code to call out to something (an HTTP client, a query engine,
-whatever), give `Sandbox` an import path to a factory function. It runs
-*inside* the child, after the privilege drop, so an extension is bound by
-the same rlimits as user code and never has to be a dependency of this
-package — its own imports live in your module, not ours.
+This library has no built-in helpers and no dependency on numpy, pandas,
+httpx, duckdb, or anything else sandboxed code might need. To let
+sandboxed code call out to something — an HTTP client, a query engine,
+whatever — give `Sandbox` an import path to a factory function. It runs
+inside the child, after the privilege drop, so an extension is bound by
+the same rlimits as user code, and its imports live in your module.
 
 ```python
 # yourpkg/sandbox_ext.py
@@ -132,18 +129,18 @@ context = Context(artifact_root=Path("./artifacts"), extra={"timeout": 5.0})
 result = await sandbox.execute('fetch("https://example.com")', context)
 ```
 
-`ctx` is `{"request_id", "workspace", "artifact_root", "extra"}` — `extra`
+`ctx` is `{"request_id", "workspace", "artifact_root", "extra"}`. `extra`
 is whatever JSON-serializable config you passed on `Context`; this library
-never reads it. A bad provider (missing module, wrong return type) fails as
-`error.type == "extension"`, distinct from user-code errors, and — if
-`self_check=True` (the default) — is caught at `Sandbox()` construction
-time rather than on first call.
+never reads it. A bad provider (missing module, wrong return type) fails
+with `error.type == "extension"`, not a user-code error type. With
+`self_check=True` (the default), that failure is caught when `Sandbox()`
+is constructed, before the first call.
 
-The same shape extends what a return value can *be*. `_project()` (the
-function that turns your final expression into JSON) knows only plain
-Python types — anything else needs a `type_projector`, one function taking
-an unsupported value and returning something projectable (plain data, or
-another unsupported value — it recurses):
+The same mechanism extends what a return value can be. `_project()`, the
+function that turns your final expression into JSON, knows only plain
+Python types. Anything else needs a `type_projector`: one function that
+takes an unsupported value and returns something projectable (plain data,
+or another unsupported value, since it recurses):
 
 ```python
 # yourpkg/sandbox_ext.py
@@ -157,8 +154,8 @@ def project(value):
 sandbox = Sandbox(type_projector="yourpkg.sandbox_ext:project")
 ```
 
-numpy/pandas support is not built in — it's the shipped example of this
-exact mechanism, in `pyplaypen_sandbox.projectors`, usable as-is:
+numpy/pandas support lives in `pyplaypen_sandbox.projectors` as the
+shipped example of this mechanism, and works as-is:
 
 ```python
 sandbox = Sandbox(type_projector="pyplaypen_sandbox.projectors:project_numpy_pandas")
@@ -167,15 +164,13 @@ result = await sandbox.execute("import numpy as np\nnp.array([1, 2])", context)
 ```
 
 Without a `type_projector` configured, returning a numpy array (or any
-other non-plain type) is `error.type == "serialization"` — same failure
-mode as any other unprojectable value, since as far as this library is
-concerned, that's exactly what it is.
+other non-plain type) fails the same way any unprojectable value does:
+`error.type == "serialization"`.
 
 ## Lower-level building blocks
 
-`execute()` is one thing built on top of this library's real guarantees —
-not the only thing you can build on them. Two layers underneath it are
-public on purpose:
+This library's guarantees don't stop at `execute()`. Two layers underneath
+it are public on purpose:
 
 **`Sandbox.run_process(argv, cwd=...)`** — the argv twin of `execute()`.
 Same rlimits, UID drop, process-group timeout/kill, and subreaper
@@ -183,7 +178,7 @@ reaping, but no JSON protocol: it runs an existing program (a script you
 already materialized on disk, a CLI, whatever) and gives you back exit
 status plus bounded/hashed stdout+stderr. Use this when your code doesn't
 speak the return-value protocol and you already have your own way of
-collecting output files — e.g. running a fixed entrypoint script per call:
+collecting output files, e.g. a fixed entrypoint script run per call:
 
 ```python
 result = await sandbox.run_process(
@@ -208,37 +203,36 @@ def preexec():
 subprocess.Popen(argv, preexec_fn=preexec)  # works with plain subprocess.Popen too
 ```
 
-If you're already running your own `subprocess.Popen(preexec_fn=...)`
-supervision and just want real rlimits and a real UID drop (the thing that
-actually makes `RLIMIT_NPROC` bind on Linux, where root is exempt from it),
-this is the whole ask — no need to adopt the rest of the library.
+If you already run your own `subprocess.Popen(preexec_fn=...)` supervision
+and just want real rlimits and a real UID drop (the thing that makes
+`RLIMIT_NPROC` bind on Linux, where root is exempt from it), that's all
+this is. No need to adopt the rest of the library.
 
 ## Compared to restricted-interpreter sandboxes (e.g. Monty)
 
-Pydantic's [Monty](https://github.com/pydantic/monty) takes a different
-approach worth naming explicitly: it runs code **in-process**, as a
-restricted Python-subset interpreter — sandboxed code can only call what
-you explicitly inject as external functions, so there's no `import os`,
-no ambient filesystem/network access, no arbitrary pip packages, because
-the interpreter itself doesn't support that surface. Its resource limits
-(allocation count, duration, memory) are counters inside its own runtime,
-not kernel `rlimit`s — there's no process boundary at all.
+Pydantic's [Monty](https://github.com/pydantic/monty) solves the same
+problem differently. It runs code in-process, in a restricted Python
+subset: sandboxed code can only call what you inject as external
+functions. There's no `import os`, no filesystem or network access, no
+arbitrary pip packages, because the interpreter doesn't support any of
+that. Its resource limits (allocation count, duration, memory) are
+counters inside its own runtime, not kernel rlimits. There's no process
+boundary.
 
-That's a different sandboxing *strategy*, not a lighter version of this
-one. Prefer pyplaypen-sandbox when the code needs real CPython (numpy,
-pandas, any pip package, legitimately spawning subprocesses) or you want
-actual kernel-enforced limits (wall-clock kill of a whole process tree,
-real `RLIMIT_NPROC`/`RLIMIT_AS`, real UID drop) rather than an
-interpreter's internal bookkeeping, which can't see what a C extension or
-an injected function does with its own memory or subprocesses. Prefer a
-restricted interpreter like Monty when call volume/latency matters (no
-subprocess-per-call cost), the workload is bounded to a small fixed set
-of host capabilities rather than open-ended generated code, or the threat
-model is closer to untrusted input than your own automation and you lack
-strong per-tenant container isolation underneath — a restricted language
-is a stronger standalone claim than "full CPython, isolated a bit more,
-but the container is still the real boundary," which is explicitly not
-what this library claims to be.
+These are two different strategies. Prefer pyplaypen-sandbox when code
+needs real CPython (numpy, pandas, any pip package, subprocesses of its
+own) or when you want kernel-enforced limits: a whole process tree killed
+on timeout, real `RLIMIT_NPROC`/`RLIMIT_AS`, a real UID drop, instead of
+an interpreter's internal bookkeeping, which can't see what a C extension
+or an injected function does with memory or subprocesses on its own.
+
+Prefer Monty when call volume or latency matters (no subprocess per
+call), when the workload is a small fixed set of host capabilities rather
+than open-ended generated code, or when the threat model is closer to
+untrusted input than your own automation and there's no strong
+per-tenant container isolation underneath it. A restricted language is a
+stronger standalone safety claim than full CPython isolated by a
+container that remains the real boundary, which is what this library is.
 
 ## Platform notes
 
