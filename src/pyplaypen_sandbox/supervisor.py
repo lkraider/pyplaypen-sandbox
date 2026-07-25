@@ -147,6 +147,11 @@ def _parse_frame(data: bytes, oversized: bool) -> dict[str, Any]:
 
 
 def _enforcement_map() -> dict[str, str]:
+    """What's actually enforced per limit, on this platform, right now.
+
+    Computed once at import time — enforcement depends only on the
+    platform, which cannot change while the process is running.
+    """
     linux = sys.platform.startswith("linux")
     return {
         "wall_seconds": "hard",
@@ -162,6 +167,9 @@ def _enforcement_map() -> dict[str, str]:
         "file_bytes": "hard_per_file" if os.name == "posix" else "hard_post_run",
         "container_resources": "container",
     }
+
+
+_ENFORCEMENT_MAP = _enforcement_map()
 
 
 class Sandbox:
@@ -239,6 +247,7 @@ class Sandbox:
         result = _error("internal", "execution did not start")
         stdout_total = stderr_total = 0
         stdout_hash = stderr_hash = hashlib.sha256(b"").hexdigest()
+        limits_dict = dataclasses.asdict(limits)
         try:
             try:
                 await asyncio.wait_for(self._semaphore.acquire(), timeout=limits.wall_seconds)
@@ -279,7 +288,7 @@ class Sandbox:
                     "globals_provider": self.globals_provider,
                     "extra": dict(context.extra),
                 },
-                "limits": dataclasses.asdict(limits),
+                "limits": limits_dict,
             }
             request_bytes = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
 
@@ -344,17 +353,11 @@ class Sandbox:
                 # pipes, which those descendants could otherwise keep open forever.
                 await self._terminate_process_group(proc)
                 _restore_workspace_ownership(workspace, artifact_root)
-            except asyncio.CancelledError:
-                await self._terminate_process_group(proc)
-                drained = await asyncio.gather(stdout_task, stderr_task, result_task, return_exceptions=True)
-                if isinstance(drained[0], tuple):
-                    _data, stdout_total, stdout_hash = drained[0]
-                if isinstance(drained[1], tuple):
-                    _data, stderr_total, stderr_hash = drained[1]
-                raise
-            except Exception:
-                # Broken stdin/pipes and unexpected supervisor failures use the
-                # same no-orphan teardown path as timeout/cancellation.
+            except (asyncio.CancelledError, Exception):
+                # Cancellation and broken stdin/pipes/unexpected supervisor
+                # failures share one no-orphan teardown path. Listed together
+                # because CancelledError is a BaseException, not an Exception,
+                # since Python 3.8 — `except Exception` alone would miss it.
                 await self._terminate_process_group(proc)
                 drained = await asyncio.gather(stdout_task, stderr_task, result_task, return_exceptions=True)
                 if isinstance(drained[0], tuple):
@@ -381,7 +384,7 @@ class Sandbox:
                 try:
                     # Child enumeration enables return-path translation; this
                     # parent snapshot is authoritative after descendants stop.
-                    artifacts = scan(workspace, artifact_root, dataclasses.asdict(limits))
+                    artifacts = scan(workspace, artifact_root, limits_dict)
                 except ArtifactError as exc:
                     result = _error("artifact_limit", str(exc), stdout)
                     return result
@@ -416,7 +419,7 @@ class Sandbox:
             if acquired:
                 self._semaphore.release()
             self._audit(
-                context, limits, code, started, started_at, queue_ms, result,
+                context, limits_dict, code, started, started_at, queue_ms, result,
                 stdout_total, stdout_hash, stderr_total, stderr_hash, spawned,
             )
 
@@ -491,7 +494,7 @@ class Sandbox:
         return hashes
 
     def _audit(
-        self, context: Context, limits: Limits, code: str, started: float,
+        self, context: Context, limits_dict: dict[str, Any], code: str, started: float,
         started_at: datetime, queue_ms: float, result: dict[str, Any],
         stdout_bytes: int, stdout_sha256: str, stderr_bytes: int,
         stderr_sha256: str, spawned: bool,
@@ -501,8 +504,8 @@ class Sandbox:
             "event": "sandbox_execution",
             "request_id": context.request_id,
             "policy_version": self.policy_version,
-            "effective_limits": dataclasses.asdict(limits),
-            "enforcement": _enforcement_map(),
+            "effective_limits": limits_dict,
+            "enforcement": _ENFORCEMENT_MAP,
             "code_sha256": hashlib.sha256(code.encode("utf-8")).hexdigest(),
             "started_at": started_at.isoformat(),
             "finished_at": datetime.now(timezone.utc).isoformat(),

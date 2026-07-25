@@ -105,19 +105,17 @@ def _replace_paths(value: Any, translations: dict[str, str]) -> Any:
 
 
 def _provisional_artifacts(workspace: Path, artifact_root: Path, limits: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, str]]:
+    """Scan once; scan() already excludes symlinks/dotfiles/dirs, so build
+    both relative- and absolute-path translations straight from its result
+    instead of re-walking the workspace a second time."""
     artifacts = scan(workspace, artifact_root, limits)
-    # Rewrite both relative and absolute in-code path spellings to the
-    # artifact_root-relative path, so a returned path is portable for the caller.
+    workspace_prefix = workspace.relative_to(artifact_root)
     translations: dict[str, str] = {}
-    for path in sorted(workspace.rglob("*")):
-        if not path.is_file() or path.is_symlink():
-            continue
-        relative = path.relative_to(workspace)
-        if any(part.startswith(".") for part in relative.parts):
-            continue
-        global_path = str(path.relative_to(artifact_root))
+    for artifact in artifacts:
+        global_path = artifact["path"]
+        relative = Path(global_path).relative_to(workspace_prefix)
         translations[str(relative)] = global_path
-        translations[str(path)] = global_path
+        translations[str(workspace / relative)] = global_path
     return artifacts, translations
 
 
