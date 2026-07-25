@@ -248,6 +248,12 @@ class Sandbox:
         if payload.get("status") != "ok":
             raise RuntimeError(f"sandbox self-check failed: {payload.get('message', 'unknown error')}")
 
+    # Shares one skeleton with run_process below: acquire the semaphore,
+    # spawn cancel-safely, race the wall clock, terminate_process_group on
+    # every exit path, capture bounded/hashed output, audit in `finally`.
+    # Deliberately not factored into one shared function — a third
+    # execution mode should be built by diffing these two, not by first
+    # understanding a generic abstraction over both.
     async def execute(self, code: str, context: Context, limits: Limits = DEFAULT_LIMITS) -> dict[str, Any]:
         started = time.monotonic()
         started_at = datetime.now(timezone.utc)
@@ -434,6 +440,10 @@ class Sandbox:
                 stdout_total, stdout_hash, stderr_total, stderr_hash, spawned,
             )
 
+    # Shares one skeleton with execute() above: acquire the semaphore, spawn
+    # cancel-safely, race the wall clock, terminate_process_group on every
+    # exit path, capture bounded/hashed output, audit in `finally`. See the
+    # comment on execute() for why that's duplicated here, not factored out.
     async def run_process(
         self, argv: list[str], *, cwd: Path, env: Mapping[str, str] | None = None,
         limits: Limits = DEFAULT_LIMITS, request_id: str | None = None,
