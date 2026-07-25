@@ -85,14 +85,18 @@ async def test_missing_program_is_reported_not_raised(tmp_path, sandbox):
 
 async def test_concurrency_is_shared_with_execute(tmp_path):
     sandbox = Sandbox(self_check=False, max_concurrency=1)
+    # The holder must still own the only permit when the second call's acquire
+    # deadline elapses, or the second call slips through and times out on its
+    # own wall budget instead of reporting busy. Keep the hold well past the
+    # busy call's wall so the outcome is unambiguous under a slow spawn path.
     slow = asyncio.create_task(sandbox.run_process(
-        [sys.executable, "-c", "import time; time.sleep(0.4)"], cwd=tmp_path,
-        limits=replace(DEFAULT_LIMITS, wall_seconds=2.0),
+        [sys.executable, "-c", "import time; time.sleep(1.0)"], cwd=tmp_path,
+        limits=replace(DEFAULT_LIMITS, wall_seconds=3.0),
     ))
-    await asyncio.sleep(0.05)
+    await asyncio.sleep(0.1)
     busy = await sandbox.run_process(
         [sys.executable, "-c", "1"], cwd=tmp_path,
-        limits=replace(DEFAULT_LIMITS, wall_seconds=0.4, cpu_seconds=1),
+        limits=replace(DEFAULT_LIMITS, wall_seconds=0.3, cpu_seconds=1),
     )
     assert busy["status"] == "busy"
     assert (await slow)["status"] == "ok"

@@ -82,7 +82,10 @@ async def test_hardlink_to_outside_file_is_not_captured_as_an_artifact(tmp_path,
         captured = Path(tmp_path) / result["return_value"]
         assert captured.read_text() != "TOPSECRET", "outside content exfiltrated via hardlink"
     else:
-        assert result["error"]["type"] == "artifact_limit"
+        # Same-UID: scan rejects the link (artifact_limit). Dropped-UID under
+        # root: the kernel's protected_hardlinks denies the link itself
+        # (runtime). Either way the outside content never becomes an artifact.
+        assert result["error"]["type"] in {"artifact_limit", "runtime"}
 
 
 # --- robustness guards: hostile termination must not hang or crash the parent ---
