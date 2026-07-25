@@ -24,6 +24,7 @@
     line-height: 1.65;
   }
   main {
+    container-type: inline-size;
     max-width: 40rem;
     margin: 0 auto;
     padding: clamp(2.5rem, 8vw, 6rem) 1.5rem 4rem;
@@ -95,13 +96,21 @@
     display: flex;
     flex-direction: column;
     align-items: center;
+    --iface-w: 16.5rem;
+    --gap: 2rem;
   }
   .diagram-top, .connectors {
     display: flex;
-    gap: clamp(0.75rem, 4vw, 2.5rem);
+    gap: var(--gap);
   }
   .node-iface, .connector {
-    width: clamp(8.75rem, 27vw, 11.5rem);
+    width: var(--iface-w);
+  }
+  /* Below this, two boxes at full width plus gap no longer fit the
+     diagram's own available space — shrink together rather than wrap
+     the label at an arbitrary point. */
+  @container (max-width: 35.5rem) {
+    .diagram { --iface-w: 8.75rem; --gap: 0.75rem; }
   }
   .node {
     border-radius: 6px;
@@ -115,7 +124,7 @@
   }
   .node-base {
     border: 1px solid var(--ink);
-    width: min(100%, 24.5rem);
+    width: min(100%, calc(var(--iface-w) * 2 + var(--gap)));
     transition: box-shadow 0.25s ease;
   }
   .node:hover, .node:focus-visible {
