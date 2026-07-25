@@ -115,6 +115,48 @@ never reads it. A bad provider (missing module, wrong return type) fails as
 `self_check=True` (the default) — is caught at `Sandbox()` construction
 time rather than on first call.
 
+## Lower-level building blocks
+
+`execute()` is one thing built on top of this library's real guarantees —
+not the only thing you can build on them. Two layers underneath it are
+public on purpose:
+
+**`Sandbox.run_process(argv, cwd=...)`** — the argv twin of `execute()`.
+Same rlimits, UID drop, process-group timeout/kill, and subreaper
+reaping, but no JSON protocol: it runs an existing program (a script you
+already materialized on disk, a CLI, whatever) and gives you back exit
+status plus bounded/hashed stdout+stderr. Use this when your code doesn't
+speak the return-value protocol and you already have your own way of
+collecting output files — e.g. running a fixed entrypoint script per call:
+
+```python
+result = await sandbox.run_process(
+    [sys.executable, "entrypoint.py"], cwd=workspace, limits=Limits(wall_seconds=60),
+)
+# {"status": "ok" | "timeout" | "busy" | "cancelled" | "internal",
+#  "returncode": int | None, "timed_out": bool, "stdout": str, "stderr": str}
+```
+
+**`pyplaypen_sandbox.privilege`** — the two primitives everything else is
+built from, with no dependency on `Sandbox`, asyncio, or anything else in
+this package:
+
+```python
+from pyplaypen_sandbox.privilege import apply_resource_limits, drop_root_privileges
+
+def preexec():
+    apply_resource_limits({"cpu_seconds": 5, "memory_bytes": 2**30,
+                            "process_count": 16, "file_bytes": 2**26})
+    drop_root_privileges(uid=65534)
+
+subprocess.Popen(argv, preexec_fn=preexec)  # works with plain subprocess.Popen too
+```
+
+If you're already running your own `subprocess.Popen(preexec_fn=...)`
+supervision and just want real rlimits and a real UID drop (the thing that
+actually makes `RLIMIT_NPROC` bind on Linux, where root is exempt from it),
+this is the whole ask — no need to adopt the rest of the library.
+
 ## Platform notes
 
 `RLIMIT_AS` and `RLIMIT_NPROC` are Linux-only (not enforced on macOS/BSD —

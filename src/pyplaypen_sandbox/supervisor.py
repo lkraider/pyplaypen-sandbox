@@ -56,6 +56,9 @@ class Context:
     # Opaque, JSON-serializable, call-scoped config for Sandbox's globals_provider.
     # This library never reads it — it exists only for the caller's extension.
     extra: Mapping[str, Any] = field(default_factory=dict)
+    # Opaque, JSON-serializable data merged into the audit log record only —
+    # never reaches sandboxed code. For a caller's own tenant/backend tags.
+    audit_extra: Mapping[str, Any] = field(default_factory=dict)
 
 
 def _bounded_fd_read(fd: int, cap: int) -> tuple[bytes, int, bool]:
@@ -431,6 +434,123 @@ class Sandbox:
                 stdout_total, stdout_hash, stderr_total, stderr_hash, spawned,
             )
 
+    async def run_process(
+        self, argv: list[str], *, cwd: Path, env: Mapping[str, str] | None = None,
+        limits: Limits = DEFAULT_LIMITS, request_id: str | None = None,
+        audit_extra: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Run an existing program under the same rlimit/UID-drop/process-
+        group/subreaper guarantees as execute(), with no JSON protocol —
+        just exit status and bounded/hashed stdout+stderr. The lower-level
+        twin of execute(), for callers who already own a workspace (cwd)
+        and their own way of collecting outputs, instead of wanting a
+        return value or auto-discovered artifacts.
+        """
+        started = time.monotonic()
+        started_at = datetime.now(timezone.utc)
+        request_id = request_id or uuid.uuid4().hex
+        queue_ms = 0.0
+        acquired = spawned = False
+        limits_dict = dataclasses.asdict(limits)
+        result: dict[str, Any] = {
+            "status": "internal", "returncode": None, "timed_out": False,
+            "stdout": "", "stderr": "",
+        }
+        stdout_total = stderr_total = 0
+        stdout_hash = stderr_hash = hashlib.sha256(b"").hexdigest()
+        try:
+            try:
+                await asyncio.wait_for(self._semaphore.acquire(), timeout=limits.wall_seconds)
+                acquired = True
+                queue_ms = (time.monotonic() - started) * 1000.0
+            except TimeoutError:
+                queue_ms = (time.monotonic() - started) * 1000.0
+                result["status"] = "busy"
+                return result
+
+            # See execute()'s comment on the same check: writable-by-child-uid
+            # is a directory-permission property, so chowning cwd itself
+            # (not its existing contents) is enough for the child to create
+            # new files there.
+            if hasattr(os, "geteuid") and os.geteuid() == 0:
+                os.chown(cwd, self.child_uid, self.child_uid)
+
+            proc: asyncio.subprocess.Process | None = None
+            spawn_task = asyncio.create_task(asyncio.create_subprocess_exec(
+                sys.executable, "-m", "pyplaypen_sandbox._exec_bootstrap",
+                "--uid", str(self.child_uid),
+                "--cpu-seconds", str(limits.cpu_seconds),
+                "--memory-bytes", str(limits.memory_bytes),
+                "--process-count", str(limits.process_count),
+                "--file-bytes", str(limits.file_bytes),
+                "--", *argv,
+                cwd=str(cwd), stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+                start_new_session=True, env=dict(os.environ if env is None else env),
+            ))
+            try:
+                # Same cancel-during-spawn recovery as execute(): don't lose
+                # track of a process that was actually created.
+                proc = await asyncio.shield(spawn_task)
+            except asyncio.CancelledError:
+                try:
+                    proc = await spawn_task
+                    spawned = True
+                except Exception:
+                    proc = None
+                if proc is not None:
+                    await self._terminate_process_group(proc)
+                raise
+            else:
+                spawned = True
+
+            stdout_task = asyncio.create_task(_bounded_stream_read(proc.stdout, limits.stdout_bytes))
+            stderr_task = asyncio.create_task(_bounded_stream_read(proc.stderr, limits.stderr_bytes))
+            try:
+                remaining = limits.wall_seconds - (time.monotonic() - started)
+                try:
+                    if remaining <= 0:
+                        raise TimeoutError
+                    await asyncio.wait_for(asyncio.shield(proc.wait()), timeout=remaining)
+                except TimeoutError:
+                    await self._terminate_process_group(proc)
+                    stdout_data, stdout_total, stdout_hash = await stdout_task
+                    stderr_data, stderr_total, stderr_hash = await stderr_task
+                    result = {
+                        "status": "timeout", "returncode": proc.returncode, "timed_out": True,
+                        "stdout": _decode_stdout(stdout_data, stdout_total > limits.stdout_bytes, limits.stdout_bytes),
+                        "stderr": _decode_stdout(stderr_data, stderr_total > limits.stderr_bytes, limits.stderr_bytes),
+                    }
+                    return result
+                # Exited on its own; still tear down any background
+                # descendants before trusting the output pipes are finished.
+                await self._terminate_process_group(proc)
+            except (asyncio.CancelledError, Exception):
+                await self._terminate_process_group(proc)
+                raise
+
+            stdout_data, stdout_total, stdout_hash = await stdout_task
+            stderr_data, stderr_total, stderr_hash = await stderr_task
+            result = {
+                "status": "ok", "returncode": proc.returncode, "timed_out": False,
+                "stdout": _decode_stdout(stdout_data, stdout_total > limits.stdout_bytes, limits.stdout_bytes),
+                "stderr": _decode_stdout(stderr_data, stderr_total > limits.stderr_bytes, limits.stderr_bytes),
+            }
+            return result
+        except asyncio.CancelledError:
+            result["status"] = "cancelled"
+            raise
+        except Exception as exc:
+            result = {**result, "status": "internal", "stderr": f"{type(exc).__name__}: {exc}"}
+            return result
+        finally:
+            if acquired:
+                self._semaphore.release()
+            self._audit_process(
+                request_id, argv, limits_dict, started, started_at, queue_ms, result,
+                stdout_total, stdout_hash, stderr_total, stderr_hash, spawned, audit_extra,
+            )
+
     @staticmethod
     def _classify_exit(returncode: int | None) -> str | None:
         if returncode is None or returncode >= 0:
@@ -530,4 +650,35 @@ class Sandbox:
             "artifact_bytes": sum(int(item.get("bytes", 0)) for item in artifacts),
             "artifact_hashes": self._artifact_hashes(context, artifacts),
         }
+        if context.audit_extra:
+            record["audit_extra"] = dict(context.audit_extra)
+        LOGGER.info(json.dumps(record, separators=(",", ":"), sort_keys=True))
+
+    def _audit_process(
+        self, request_id: str, argv: list[str], limits_dict: dict[str, Any],
+        started: float, started_at: datetime, queue_ms: float, result: dict[str, Any],
+        stdout_bytes: int, stdout_sha256: str, stderr_bytes: int, stderr_sha256: str,
+        spawned: bool, audit_extra: Mapping[str, Any] | None,
+    ) -> None:
+        record = {
+            "event": "process_execution",
+            "request_id": request_id,
+            "policy_version": self.policy_version,
+            "effective_limits": limits_dict,
+            "enforcement": _ENFORCEMENT_MAP,
+            "argv_sha256": hashlib.sha256(json.dumps(argv).encode("utf-8")).hexdigest(),
+            "started_at": started_at.isoformat(),
+            "finished_at": datetime.now(timezone.utc).isoformat(),
+            "duration_ms": round((time.monotonic() - started) * 1000.0, 3),
+            "queue_ms": round(queue_ms, 3),
+            "spawned": spawned,
+            "status": result.get("status", "internal"),
+            "returncode": result.get("returncode"),
+            "stdout_bytes": stdout_bytes,
+            "stdout_sha256": stdout_sha256,
+            "stderr_bytes": stderr_bytes,
+            "stderr_sha256": stderr_sha256,
+        }
+        if audit_extra:
+            record["audit_extra"] = dict(audit_extra)
         LOGGER.info(json.dumps(record, separators=(",", ":"), sort_keys=True))

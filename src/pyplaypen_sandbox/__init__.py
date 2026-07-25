@@ -1,9 +1,13 @@
 from pathlib import Path
 from typing import Any, Mapping
 
+from .privilege import apply_resource_limits, drop_root_privileges
 from .supervisor import DEFAULT_LIMITS, Context, Limits, Sandbox
 
-__all__ = ["Sandbox", "Context", "Limits", "DEFAULT_LIMITS", "run"]
+__all__ = [
+    "Sandbox", "Context", "Limits", "DEFAULT_LIMITS", "run",
+    "apply_resource_limits", "drop_root_privileges",
+]
 __version__ = "0.1.0"
 
 
