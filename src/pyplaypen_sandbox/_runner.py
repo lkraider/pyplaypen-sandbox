@@ -71,10 +71,13 @@ def _project(
         active.add(identity)
         try:
             if isinstance(value, dict):
-                return {
-                    str(key): _project(item, seen=active, depth=depth + 1, type_projector=type_projector)
-                    for key, item in value.items()
-                }
+                projected: dict[str, Any] = {}
+                for key, item in value.items():
+                    coerced = str(key)
+                    if coerced in projected:
+                        raise ProjectionError(f"dict keys collide after string coercion: {coerced!r}")
+                    projected[coerced] = _project(item, seen=active, depth=depth + 1, type_projector=type_projector)
+                return projected
             return [
                 _project(item, seen=active, depth=depth + 1, type_projector=type_projector)
                 for item in value
