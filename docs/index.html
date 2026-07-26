@@ -179,9 +179,9 @@
     line-height: 1.5;
   }
   /* The two node boxes are permanent — execute()/run_process() are always
-     callable, and the shared skeleton always exists. Nothing here ever
+     callable, and the shared supervisor always exists. Nothing here ever
      goes to opacity 0. What's transient is one call: it travels down
-     from an interface into the skeleton (that's the real direction —
+     from an interface into the supervisor (that's the real direction —
      the interface reaches into the shared mechanism, not the other way
      round), pauses while the child does its work, then travels back up
      with the result. A soft glow marks arrival, and fades. */
@@ -261,7 +261,7 @@
   <h1>pyplaypen-sandbox</h1>
   <p class="lede">One-shot subprocess sandbox for running Python inside a container.</p>
 
-  <figure class="diagram" aria-label="Diagram: two permanent interfaces, execute() and run_process(), each reaching down into one shared supervision skeleton to run a call, then returning a result back up. Hover or focus a box to pause its cycle.">
+  <figure class="diagram" aria-label="Diagram: two permanent interfaces, execute() and run_process(), each reaching down into one shared supervisor to run a call, then returning a result back up. Hover or focus a box to pause its cycle.">
     <div class="diagram-top">
       <div class="node node-iface" id="node-execute" tabindex="0">
         <span class="node-title">execute(<wbr>code)</span>
@@ -277,10 +277,10 @@
       <span class="connector"><span class="line"></span><span class="pulse pulse-b"></span></span>
     </div>
     <div class="node node-base" tabindex="0">
-      <span class="node-title">one shared skeleton</span>
+      <span class="node-title">one shared supervisor</span>
       <span class="node-sub">fresh process group per call · rlimits · uid drop · timeout-kill · subreaper reaping · bounded &amp; hashed output</span>
     </div>
-    <figcaption>each interface reaches into the same shared skeleton, does its work, and returns</figcaption>
+    <figcaption>each interface reaches into the same shared supervisor, does its work, and returns</figcaption>
   </figure>
 
   <div class="thesis">
