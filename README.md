@@ -293,9 +293,15 @@ assert sandbox.enforcement["process_count"] != "unsupported"
 
 ## Platform notes
 
-`RLIMIT_AS` and `RLIMIT_NPROC` are Linux-only (not enforced on macOS/BSD —
-the wall-clock timeout and process-group teardown still apply everywhere).
-Root-UID drop is a no-op if the parent isn't running as root.
+On macOS, `cpu_seconds`, `file_bytes`, and `open_files` are enforced natively,
+and the wall-clock timeout and process-group teardown apply everywhere.
+`memory_bytes` and `process_count` are reported `"unsupported"`: Darwin has no
+honest primitive for either — `RLIMIT_AS` aliases the unenforced `RLIMIT_RSS`,
+and per-UID `RLIMIT_NPROC` needs a root-drop that isn't the supported shape. For
+full enforcement on a Mac, run the Linux image in a Linux VM (Apple `container`,
+Colima, or Docker) — the recommended route. `Sandbox.enforcement` reports which
+limits are real on the current host. Root-UID drop is a no-op if the parent
+isn't running as root.
 
 `process_count` binds to your exact `Limits` value only when the parent is root
 and drops to a dedicated UID (`RLIMIT_NPROC` is per real UID, so it's only safe
