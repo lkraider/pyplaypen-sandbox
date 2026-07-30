@@ -112,6 +112,12 @@ async def _bounded_stream_read(stream: asyncio.StreamReader, cap: int) -> tuple[
     return bytes(kept), total
 
 
+async def _empty_read() -> tuple[bytes, int]:
+    """Stand-in for a stream that was merged away (run_process merge_output),
+    so its await site reads as empty without a special case."""
+    return b"", 0
+
+
 _TRUNCATION_MARKER = "\n...[truncated]"
 
 
@@ -525,7 +531,7 @@ class Sandbox:
     async def run_process(
         self, argv: list[str], *, cwd: Path, env: Mapping[str, str] | None = None,
         limits: Limits = DEFAULT_LIMITS, request_id: str | None = None,
-        audit_extra: Mapping[str, Any] | None = None,
+        audit_extra: Mapping[str, Any] | None = None, merge_output: bool = False,
     ) -> dict[str, Any]:
         """Run an existing program under the same rlimit/UID-drop/process-
         group/subreaper guarantees as execute(), with no JSON protocol —
@@ -533,6 +539,16 @@ class Sandbox:
         twin of execute(), for callers who already own a workspace (cwd)
         and their own way of collecting outputs, instead of wanting a
         return value or auto-discovered artifacts.
+
+        merge_output folds stderr into stdout at the OS level
+        (stderr=STDOUT) so the two interleave in one stream, for
+        operator-facing logs that need stderr in the context of the
+        stdout around it — interleaving that can only be captured here,
+        not reconstructed from the two separate strings. Then "stderr" is
+        "" and the merged stream is bounded by stdout_bytes. Ordering is
+        best-effort: only writes within PIPE_BUF are atomic and child
+        buffering can still reorder, so it's "roughly interleaved as
+        flushed", not a true timestamped merge.
         """
         started = time.monotonic()
         started_at = datetime.now(timezone.utc)
@@ -573,7 +589,8 @@ class Sandbox:
                 "--open-files", str(limits.open_files),
                 "--", *argv,
                 cwd=str(cwd), stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT if merge_output else asyncio.subprocess.PIPE,
                 start_new_session=True, env=dict(os.environ if env is None else env),
             ))
             try:
@@ -593,7 +610,12 @@ class Sandbox:
                 spawned = True
 
             stdout_task = asyncio.create_task(_bounded_stream_read(proc.stdout, limits.stdout_bytes))
-            stderr_task = asyncio.create_task(_bounded_stream_read(proc.stderr, limits.stderr_bytes))
+            # merge_output routed stderr into stdout's pipe; proc.stderr is None,
+            # so stand in an empty result and leave every await stderr_task below
+            # untouched.
+            stderr_task = asyncio.create_task(
+                _empty_read() if merge_output else _bounded_stream_read(proc.stderr, limits.stderr_bytes)
+            )
             try:
                 remaining = limits.wall_seconds - (time.monotonic() - started)
                 try:

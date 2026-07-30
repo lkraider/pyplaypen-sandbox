@@ -38,6 +38,29 @@ async def test_stderr_is_captured_separately_from_stdout(tmp_path, sandbox):
     assert result["stderr"] == "err\n"
 
 
+async def test_merge_output_folds_stderr_into_stdout(tmp_path, sandbox):
+    code = "import sys; print('out'); print('err', file=sys.stderr)"
+    result = await sandbox.run_process([sys.executable, "-c", code], cwd=tmp_path, merge_output=True)
+    assert result["stderr"] == ""
+    assert "out" in result["stdout"] and "err" in result["stdout"]
+    assert result["returncode"] == 0
+
+
+async def test_merge_output_preserves_emission_order(tmp_path, sandbox):
+    # The capability the separate-stream API structurally can't offer:
+    # stderr interleaved with the stdout around it, in emission order.
+    # Explicit flushes keep it deterministic (each write is < PIPE_BUF).
+    code = (
+        "import sys\n"
+        "print('1-out', flush=True)\n"
+        "print('2-err', file=sys.stderr, flush=True)\n"
+        "print('3-out', flush=True)\n"
+    )
+    result = await sandbox.run_process([sys.executable, "-c", code], cwd=tmp_path, merge_output=True)
+    assert result["stdout"] == "1-out\n2-err\n3-out\n"
+    assert result["stderr"] == ""
+
+
 async def test_timeout_kills_the_whole_process_group(tmp_path, sandbox):
     code = '''
 import subprocess, sys, time

@@ -178,7 +178,7 @@ it are public on purpose:
 Same rlimits, UID drop, process-group timeout/kill, and subreaper
 reaping, but no JSON protocol: it runs an existing program (a script you
 already materialized on disk, a CLI, whatever) and gives you back exit
-status plus bounded/hashed stdout+stderr. Use this when your code doesn't
+status plus bounded stdout+stderr. Use this when your code doesn't
 speak the return-value protocol and you already have your own way of
 collecting output files, e.g. a fixed entrypoint script run per call:
 
@@ -192,6 +192,14 @@ result = await sandbox.run_process(
 ```
 
 `argv` accepts any process: a script, a shell command, a compiled binary.
+
+Pass `merge_output=True` to fold stderr into stdout at the OS level, so
+the two interleave in one stream (in emission order) for an operator log
+that needs stderr in the context of the stdout around it — interleaving
+that has to be captured here and can't be reconstructed from the two
+separate strings. `stderr` is then `""` and the merged stream is bounded
+by `stdout_bytes`. Ordering is best-effort (only writes within `PIPE_BUF`
+are atomic, and child buffering can still reorder).
 
 **`pyplaypen_sandbox.privilege`** — the two primitives everything else is
 built from, with no dependency on `Sandbox`, asyncio, or anything else in
