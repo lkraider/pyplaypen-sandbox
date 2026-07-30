@@ -42,3 +42,18 @@ jobs:
           # ...and warn_only=True proceeds anyway, honestly reporting unsupported
           docker run --rm --user 10001:10001 pyplaypen-test python -c \
             "from pyplaypen_sandbox import Sandbox; assert Sandbox(self_check=False, warn_only=True).enforcement['process_count']=='unsupported'"
+
+  test-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - run: pip install -e ".[dev]"
+      - run: python -m pytest -q
+      - name: Enforcement is honest on macOS
+        run: |
+          python -c "from pyplaypen_sandbox import Sandbox; e=Sandbox(self_check=False).enforcement; \
+          assert e['cpu_seconds']=='hard_per_process' and e['open_files']=='hard', e; \
+          assert e['memory_bytes']=='unsupported' and e['process_count']=='unsupported', e"
