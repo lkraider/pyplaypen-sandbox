@@ -18,12 +18,16 @@ async def run(
     env: Mapping[str, str] | None = None,
     limits: Limits = DEFAULT_LIMITS,
     sandbox: Sandbox | None = None,
+    warn_only: bool = False,
 ) -> dict[str, Any]:
     """One-off convenience wrapper: spins up a Sandbox (or reuses the one
     passed in) and runs a single call. For repeated calls, construct a
     Sandbox yourself to reuse its self-check and concurrency semaphore.
+    warn_only lets the throwaway Sandbox construct on a deployment that can't
+    enforce every limit instead of failing the enforcement gate; ignored when
+    a sandbox is passed in (it already made that choice).
     """
-    backend = sandbox or Sandbox(self_check=False)
+    backend = sandbox or Sandbox(self_check=False, warn_only=warn_only)
     kwargs: dict[str, Any] = {} if env is None else {"env": dict(env)}
     context = Context(artifact_root=Path(artifact_dir), **kwargs)
     return await backend.execute(code, context, limits)

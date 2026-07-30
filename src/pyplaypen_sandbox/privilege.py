@@ -16,10 +16,11 @@ RUNTIME_HOME = Path("/run/pyplaypen-sandbox")
 
 
 def apply_resource_limits(limits: Mapping[str, Any]) -> None:
-    """Set RLIMIT_CPU/RLIMIT_FSIZE everywhere POSIX, RLIMIT_AS/RLIMIT_NPROC
-    on Linux only (unsupported elsewhere). Call before drop_root_privileges,
-    and before running anything caller-supplied. Requires
-    limits['cpu_seconds'], ['file_bytes'], ['memory_bytes'], ['process_count'].
+    """Set RLIMIT_CPU/RLIMIT_FSIZE/RLIMIT_NOFILE everywhere POSIX,
+    RLIMIT_AS/RLIMIT_NPROC on Linux only (unsupported elsewhere). Call before
+    drop_root_privileges, and before running anything caller-supplied.
+    Requires limits['cpu_seconds'], ['file_bytes'], ['open_files'],
+    ['memory_bytes'], ['process_count'].
     """
     try:
         import resource
@@ -36,6 +37,7 @@ def apply_resource_limits(limits: Mapping[str, Any]) -> None:
     # Permit one sentinel byte so a short write caused by RLIMIT_FSIZE is
     # detectable by a post-run configured-size check.
     apply("RLIMIT_FSIZE", int(limits["file_bytes"]) + 1)
+    apply("RLIMIT_NOFILE", int(limits["open_files"]))
     if sys.platform.startswith("linux"):
         apply("RLIMIT_AS", int(limits["memory_bytes"]))
         # RLIMIT_NPROC is per real UID, system-wide, not per process group.

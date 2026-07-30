@@ -76,6 +76,53 @@ async def test_writes_files_into_cwd(tmp_path, sandbox):
     assert (tmp_path / "out.txt").read_text() == "hi"
 
 
+async def test_open_files_limit_is_enforced(tmp_path, sandbox):
+    # Exercises _exec_bootstrap.py's own --open-files flag, the CLI-argv
+    # path that's separate from execute()'s Limits-dict-in-JSON path.
+    code = "import tempfile\n[tempfile.TemporaryFile() for _ in range(64)]\n"
+    result = await sandbox.run_process(
+        [sys.executable, "-c", code], cwd=tmp_path, limits=replace(DEFAULT_LIMITS, open_files=8),
+    )
+    assert result["status"] == "ok"
+    assert result["returncode"] != 0
+    assert "Too many open files" in result["stderr"]
+
+
+async def test_open_files_headroom_permits_the_same_workload(tmp_path, sandbox):
+    # Counterfactual: identical 64-file code, default open_files instead of
+    # 8 — proves the failure above is the limit, not run_process itself or
+    # the workload.
+    code = "import tempfile\n[tempfile.TemporaryFile() for _ in range(64)]\n"
+    result = await sandbox.run_process([sys.executable, "-c", code], cwd=tmp_path)
+    assert result["status"] == "ok"
+    assert result["returncode"] == 0
+
+
+async def test_invalid_open_files_value_fails_fast_not_hangs(tmp_path, sandbox):
+    # _exec_bootstrap.py's main() has no try/except of its own around
+    # apply_resource_limits, unlike _runner.py's — a bad value must still
+    # crash only the bootstrap subprocess, quickly, not hang the supervisor.
+    started = time.monotonic()
+    result = await sandbox.run_process(
+        [sys.executable, "-c", "1 + 1"], cwd=tmp_path,
+        limits=replace(DEFAULT_LIMITS, open_files=2**64, wall_seconds=5.0),
+    )
+    assert time.monotonic() - started < 2.0
+    assert result["status"] == "ok"
+    assert result["returncode"] != 0
+    assert "OverflowError" in result["stderr"]
+
+
+async def test_valid_open_files_value_does_not_trip_the_overflow_path(tmp_path, sandbox):
+    # Counterfactual: same shape, a value that's merely large rather than
+    # out of C's rlim_t range — proves the crash above is about
+    # unrepresentability, not about open_files being customized at all.
+    result = await sandbox.run_process(
+        [sys.executable, "-c", "1 + 1"], cwd=tmp_path, limits=replace(DEFAULT_LIMITS, open_files=4096),
+    )
+    assert result == {"status": "ok", "returncode": 0, "timed_out": False, "stdout": "", "stderr": ""}
+
+
 async def test_missing_program_is_reported_not_raised(tmp_path, sandbox):
     result = await sandbox.run_process(["/no/such/program-xyz"], cwd=tmp_path)
     assert result["status"] in {"ok", "internal"}

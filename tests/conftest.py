@@ -2,6 +2,20 @@ import os
 
 import pytest
 
+from pyplaypen_sandbox import Sandbox
+
+
+@pytest.fixture(autouse=True)
+def _lenient_enforcement_gate(request, monkeypatch):
+    # Most tests exercise sandbox behavior, not deployment validity, and must
+    # construct a Sandbox on any host — including a bare non-root Linux box
+    # where the enforcement gate would otherwise refuse (process_count
+    # unsupported). Neutralize the gate by default; tests that assert the gate
+    # itself opt back in with @pytest.mark.real_enforcement.
+    if request.node.get_closest_marker("real_enforcement"):
+        return
+    monkeypatch.setattr(Sandbox, "_gate_enforcement", lambda self, warn_only: None)
+
 
 @pytest.fixture(scope="session", autouse=True)
 def _traversable_basetemp(tmp_path_factory):

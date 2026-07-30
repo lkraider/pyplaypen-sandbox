@@ -279,6 +279,79 @@ async def test_linux_per_file_limit_is_enforced(tmp_path, sandbox):
     assert result["error"]["type"] == "artifact_limit"
 
 
+async def test_open_files_limit_is_enforced_and_cleans_workspace(tmp_path, sandbox):
+    # RLIMIT_NOFILE is per-process POSIX, not per-UID like RLIMIT_NPROC, so
+    # unlike the process_count tests below this needs no root/Linux gate.
+    limits = replace(DEFAULT_LIMITS, open_files=8)
+    result = await run(
+        "import tempfile\n[tempfile.TemporaryFile() for _ in range(64)]\nNone",
+        artifact_dir=str(tmp_path), sandbox=sandbox, limits=limits,
+    )
+    assert result["error"]["type"] == "open_files_limit"
+    assert not list((tmp_path / "sandbox-runs").glob("*")) if (tmp_path / "sandbox-runs").exists() else True
+
+
+async def test_open_files_headroom_permits_the_same_workload(tmp_path, sandbox):
+    # Counterfactual for the test above: identical 64-file code, default
+    # open_files (256) instead of 8 — proves the failure above is the limit
+    # value, not the workload (e.g. tempfile itself, or artifact scanning).
+    result = await run(
+        "import tempfile\n[tempfile.TemporaryFile() for _ in range(64)]\nNone",
+        artifact_dir=str(tmp_path), sandbox=sandbox,
+    )
+    assert result["status"] == "ok"
+
+
+async def test_open_files_limit_of_one_still_fails_cleanly(tmp_path, sandbox):
+    # Lower than the runner needs merely to run at all (stdin/stdout/stderr
+    # already exceed it) — must still fail deterministically and fast, not
+    # break the runner's own startup or hang.
+    started = time.monotonic()
+    result = await run(
+        'open("x", "w")\nNone', artifact_dir=str(tmp_path), sandbox=sandbox,
+        limits=replace(DEFAULT_LIMITS, open_files=1, wall_seconds=5.0),
+    )
+    assert time.monotonic() - started < 2.0
+    assert result["error"]["type"] == "open_files_limit"
+
+
+async def test_open_files_limit_of_one_still_permits_zero_new_files(tmp_path, sandbox):
+    # Counterfactual: open_files=1 isn't a blanket failure trigger — code
+    # that opens nothing new still runs fine under the same tight limit,
+    # isolating the cause to the open() call itself, not the low value alone.
+    result = await run(
+        "1 + 1", artifact_dir=str(tmp_path), sandbox=sandbox,
+        limits=replace(DEFAULT_LIMITS, open_files=1, wall_seconds=5.0),
+    )
+    assert result["status"] == "ok"
+
+
+async def test_open_files_value_beyond_c_long_range_fails_safely_not_hangs(tmp_path, sandbox):
+    # A caller-supplied limit can be nonsensical; setrlimit itself then
+    # raises before any sandboxed code runs. Must surface as a clean
+    # "internal" error, not hang or crash the supervisor.
+    started = time.monotonic()
+    result = await run(
+        "1 + 1", artifact_dir=str(tmp_path), sandbox=sandbox,
+        limits=replace(DEFAULT_LIMITS, open_files=2**64, wall_seconds=5.0),
+    )
+    assert time.monotonic() - started < 2.0
+    assert result["status"] == "error"
+    assert result["error"]["type"] == "internal"
+
+
+async def test_valid_open_files_value_does_not_trip_the_overflow_path(tmp_path, sandbox):
+    # Counterfactual: same code and call shape as the test above, but a
+    # value that's merely large, not out of C's rlim_t range — proves the
+    # "internal" result above is specifically about the value being
+    # unrepresentable, not about open_files being customized at all.
+    result = await run(
+        "1 + 1", artifact_dir=str(tmp_path), sandbox=sandbox,
+        limits=replace(DEFAULT_LIMITS, open_files=4096, wall_seconds=5.0),
+    )
+    assert result["status"] == "ok"
+
+
 @pytest.mark.linux
 @pytest.mark.skipif(not os.sys.platform.startswith("linux"), reason="Linux resource semantics required")
 async def test_linux_artifact_count_limit_cleans_workspace(tmp_path, sandbox):

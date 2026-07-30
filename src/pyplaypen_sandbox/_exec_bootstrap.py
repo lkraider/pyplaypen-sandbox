@@ -31,6 +31,7 @@ def main() -> int:
     parser.add_argument("--memory-bytes", type=int, required=True)
     parser.add_argument("--process-count", type=int, required=True)
     parser.add_argument("--file-bytes", type=int, required=True)
+    parser.add_argument("--open-files", type=int, required=True)
     args = parser.parse_args(argv[:sep])
 
     apply_resource_limits(vars(args))

@@ -46,4 +46,7 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-markers = ["linux: requires Linux-specific rlimit/uid semantics"]
+markers = [
+    "linux: requires Linux-specific rlimit/uid semantics",
+    "real_enforcement: exercises the real construction-time enforcement gate",
+]

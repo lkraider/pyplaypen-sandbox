@@ -16,7 +16,7 @@ that:
   group (`os.killpg`), not just the immediate child, so background
   descendants can't outlive the call
 - applies POSIX rlimits pre-exec: CPU seconds, address space (memory),
-  process count, max file size
+  process count, max file size, open file descriptors
 - drops from root to a dedicated non-root UID before running your code
   (Linux exempts root from `RLIMIT_NPROC`, so this matters if the parent
   runs as root)
@@ -103,8 +103,9 @@ result = await sandbox.execute(
 ```
 
 `error.type` is one of: `syntax`, `runtime`, `serialization`, `timeout`,
-`memory_limit`, `process_limit`, `artifact_limit`, `return_limit`, `busy`,
-`cancelled`, `crash`, `protocol`, `internal`, `extension`.
+`memory_limit`, `process_limit`, `open_files_limit`, `artifact_limit`,
+`return_limit`, `busy`, `cancelled`, `crash`, `protocol`, `internal`,
+`extension`.
 
 ## Extending it
 
@@ -201,7 +202,8 @@ from pyplaypen_sandbox.privilege import apply_resource_limits, drop_root_privile
 
 def preexec():
     apply_resource_limits({"cpu_seconds": 5, "memory_bytes": 2**30,
-                            "process_count": 16, "file_bytes": 2**26})
+                            "process_count": 16, "file_bytes": 2**26,
+                            "open_files": 256})
     drop_root_privileges(uid=65534)
 
 subprocess.Popen(argv, preexec_fn=preexec)  # works with plain subprocess.Popen too
@@ -243,13 +245,56 @@ container that remains the real boundary, which is what this library is.
 The repo's `Dockerfile` is the intended shape: a Linux image that creates a
 dedicated non-root UID and installs the package, with the parent free to stay
 root so each call drops to that UID — which is what makes `RLIMIT_NPROC` bind.
-Base your own image on it, or copy the pattern. CI builds its `test` stage and
-runs the suite both as root and as the dedicated UID, so the privileged and
-unprivileged paths are exercised on real Linux, not just where they no-op.
+Base your own image on it, or copy the pattern. If you instead run the container
+as a fixed non-root user (no root parent, no per-call drop), pair it with a
+container pids cap (`docker run --pids-limit=N`) so `process_count` is enforced
+at the container layer — otherwise the enforcement gate will refuse to start
+(see "Enforcement gate"). CI builds the `test` stage and runs the suite as root
+and as the dedicated non-root UID with `--pids-limit`, plus a step asserting the
+gate rejects an uncapped non-root container — so both deployment shapes and the
+gate are exercised on real Linux, not just where they no-op.
+
+## Enforcement gate
+
+On Linux, `Sandbox()` **fails at construction** if any limit it accepts can't
+actually be enforced on this deployment. A limit that is set but silently does
+nothing gives no protection while looking like it does, so the gate refuses to
+start rather than let that through — the same way `self_check=True` bails on a
+broken runner.
+
+The gate checks every limit, not one in particular. On Linux, `process_count`
+is simply the only limit whose enforceability depends on the deployment; every
+other limit is enforced either by the supervisor itself or by a per-process
+rlimit that always applies, so none of them can come up unenforced. A non-root
+container with no process cap can't enforce `process_count`, so that deployment
+is rejected until you fix it — run the container so the parent is root (each
+call drops to a dedicated UID, binding `RLIMIT_NPROC` to your value), set a
+container-level pids cap (`docker run --pids-limit=N`), or pass `warn_only=True`
+to acknowledge the gap and proceed anyway. The gate is Linux-only; on other
+platforms (dev hosts) it no-ops.
+
+`Sandbox.enforcement` exposes the same truth as a dict — what each limit
+actually enforces here (`"hard"`, `"hard_per_user"`, `"container"`,
+`"unsupported"`, ...). Gate your own deploy on it if you want a specific
+guarantee:
+
+```python
+sandbox = Sandbox()
+assert sandbox.enforcement["process_count"] != "unsupported"
+```
 
 ## Platform notes
 
 `RLIMIT_AS` and `RLIMIT_NPROC` are Linux-only (not enforced on macOS/BSD —
 the wall-clock timeout and process-group teardown still apply everywhere).
 Root-UID drop is a no-op if the parent isn't running as root.
+
+`process_count` binds to your exact `Limits` value only when the parent is root
+and drops to a dedicated UID (`RLIMIT_NPROC` is per real UID, so it's only safe
+to set once this process owns its UID). A non-root container instead relies on
+a **container-level** pids cap (`docker run --pids-limit`, a Kubernetes pod pids
+cgroup, systemd `TasksMax`) — real enforcement, but at the operator's number,
+not your `Limits.process_count`. `Sandbox.enforcement["process_count"]` reports
+which you have: `"hard_per_user"` (root, your value), `"container"` (cgroup cap,
+operator's value), or `"unsupported"` (neither — the gate rejects this).
 

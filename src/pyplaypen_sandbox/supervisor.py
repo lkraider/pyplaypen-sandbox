@@ -31,6 +31,7 @@ class Limits:
     cpu_seconds: int = 25
     memory_bytes: int = 1024 * 1024 * 1024
     process_count: int = 16
+    open_files: int = 256
     stdout_bytes: int = 64 * 1024
     stderr_bytes: int = 64 * 1024
     return_value_bytes: int = 1_000_000
@@ -154,22 +155,52 @@ def _parse_frame(data: bytes, oversized: bool) -> dict[str, Any]:
     return value
 
 
+def _cgroup_pids_capped() -> bool:
+    """True iff this process's cgroup caps process count with a finite value.
+
+    Reads the leaf cgroup's pids controller (v2 unified, then v1). A parent
+    cgroup could still cap when the leaf reads "max", so a False here is not a
+    proof of "uncapped" — this is an advisory signal for the enforcement map,
+    not a security guarantee. Never raises.
+    """
+    for path in ("/sys/fs/cgroup/pids.max", "/sys/fs/cgroup/pids/pids.max"):
+        try:
+            value = Path(path).read_text().strip()
+        except OSError:
+            continue
+        return value != "max" and value.isdigit()
+    return False
+
+
 def _enforcement_map() -> dict[str, str]:
     """What's actually enforced per limit, on this platform, right now.
 
-    Computed once at import time — enforcement depends on the platform and
-    on whether this process is root, neither of which changes at runtime.
+    Depends on the platform, whether this process is root, and (for
+    process_count on non-root Linux) the container's cgroup pids cap — none of
+    which change during the process's life, so a Sandbox computes this once.
     """
     linux = sys.platform.startswith("linux")
     is_root = hasattr(os, "geteuid") and os.geteuid() == 0
+    if not linux:
+        process_count = "unsupported"
+    elif is_root:
+        # Root drops to a dedicated UID, so RLIMIT_NPROC binds the caller's value.
+        process_count = "hard_per_user"
+    elif _cgroup_pids_capped():
+        # A cgroup pids cap bounds process count at the container layer, but at
+        # the operator's value, not the caller's Limits.process_count.
+        process_count = "container"
+    else:
+        # Non-root without a cgroup cap: RLIMIT_NPROC would cap the shared
+        # ambient UID (see the geteuid gate in privilege.py), so nothing safely
+        # enforces this per call.
+        process_count = "unsupported"
     return {
         "wall_seconds": "hard",
         "cpu_seconds": "hard_per_process" if os.name == "posix" else "unsupported",
         "memory_bytes": "best_effort_per_process" if linux else "unsupported",
-        # Per real UID, system-wide, not per call — only applied when this
-        # process is root and about to drop to its own dedicated UID.
-        # Otherwise it would cap every process sharing the ambient UID.
-        "process_count": "hard_per_user" if linux and is_root else "unsupported",
+        "process_count": process_count,
+        "open_files": "hard" if os.name == "posix" else "unsupported",
         "stdout_bytes": "hard_retained",
         "stderr_bytes": "hard_retained",
         "return_value_bytes": "hard",
@@ -179,9 +210,6 @@ def _enforcement_map() -> dict[str, str]:
         "file_bytes": "hard_per_file" if os.name == "posix" else "hard_post_run",
         "container_resources": "container",
     }
-
-
-_ENFORCEMENT_MAP = _enforcement_map()
 
 
 class Sandbox:
@@ -195,8 +223,9 @@ class Sandbox:
 
     # Versions this class's own audit-log shape, not a Limits instance —
     # bump it if the fields in _audit's record change, not when a caller
-    # tunes a Limits value.
-    policy_version = "v1"
+    # tunes a Limits value. v2 added open_files to effective_limits/enforcement
+    # and the "container" process_count enforcement state.
+    policy_version = "v2"
 
     def __init__(
         self,
@@ -204,6 +233,7 @@ class Sandbox:
         max_concurrency: int = 1,
         startup_timeout: float = 30.0,
         self_check: bool = True,
+        warn_only: bool = False,
         child_uid: int = 65534,
         child_env: Mapping[str, str] | None = None,
         globals_provider: str | None = None,
@@ -215,10 +245,39 @@ class Sandbox:
         self.child_uid = child_uid
         self.globals_provider = globals_provider
         self.type_projector = type_projector
+        self._enforcement = _enforcement_map()
+        self._gate_enforcement(warn_only)
         self._subreaper_enabled = self._enable_subreaper()
         self._semaphore = asyncio.Semaphore(max_concurrency)
         if self_check:
             self._run_self_check(startup_timeout, child_env, globals_provider, type_projector)
+
+    @property
+    def enforcement(self) -> dict[str, str]:
+        """What each limit actually enforces on this deployment right now — the
+        truthful counterpart to the requested Limits values. Gate your own
+        deploy on it, e.g. assert enforcement["process_count"] != "unsupported"."""
+        return dict(self._enforcement)
+
+    def _gate_enforcement(self, warn_only: bool) -> None:
+        """Fail loudly if a defined limit isn't enforced here, so a set limit
+        never gives a false sense of protection. Linux-only: the deployment
+        target is a Linux container; elsewhere the rlimits this gates on don't
+        apply and it's a dev host, not a boundary."""
+        if not sys.platform.startswith("linux"):
+            return
+        unsupported = sorted(k for k, v in self._enforcement.items() if v == "unsupported")
+        if not unsupported:
+            return
+        detail = (
+            f"limits not enforced on this deployment: {', '.join(unsupported)}. "
+            "Run as root (drops to a dedicated UID), set a container pids cap "
+            "(docker --pids-limit), or pass warn_only=True to proceed anyway."
+        )
+        if warn_only:
+            LOGGER.warning("pyplaypen-sandbox: %s", detail)
+            return
+        raise RuntimeError(detail)
 
     @staticmethod
     def _enable_subreaper() -> bool:
@@ -514,6 +573,7 @@ class Sandbox:
                 "--memory-bytes", str(limits.memory_bytes),
                 "--process-count", str(limits.process_count),
                 "--file-bytes", str(limits.file_bytes),
+                "--open-files", str(limits.open_files),
                 "--", *argv,
                 cwd=str(cwd), stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
@@ -674,7 +734,7 @@ class Sandbox:
             "request_id": context.request_id,
             "policy_version": self.policy_version,
             "effective_limits": limits_dict,
-            "enforcement": _ENFORCEMENT_MAP,
+            "enforcement": self._enforcement,
             "code_sha256": hashlib.sha256(code.encode("utf-8")).hexdigest(),
             "started_at": started_at.isoformat(),
             "finished_at": datetime.now(timezone.utc).isoformat(),
@@ -706,7 +766,7 @@ class Sandbox:
             "request_id": request_id,
             "policy_version": self.policy_version,
             "effective_limits": limits_dict,
-            "enforcement": _ENFORCEMENT_MAP,
+            "enforcement": self._enforcement,
             "argv_sha256": hashlib.sha256(json.dumps(argv).encode("utf-8")).hexdigest(),
             "started_at": started_at.isoformat(),
             "finished_at": datetime.now(timezone.utc).isoformat(),

@@ -212,8 +212,11 @@ def _run(payload: dict[str, Any]) -> dict[str, Any]:
     except MemoryError:
         return _error("memory_limit", "memory limit exceeded")
     except OSError as exc:
-        if getattr(exc, "errno", None) == 11:
+        errno = getattr(exc, "errno", None)
+        if errno == 11:  # EAGAIN, from fork() hitting RLIMIT_NPROC
             return _error("process_limit", "process limit exceeded")
+        if errno == 24:  # EMFILE, from open() hitting RLIMIT_NOFILE
+            return _error("open_files_limit", "open file limit exceeded")
         return _error("runtime", f"{type(exc).__name__}: {exc}")
     except BaseException as exc:
         return _error("runtime", f"{type(exc).__name__}: {exc}")
