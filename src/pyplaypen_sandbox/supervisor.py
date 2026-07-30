@@ -99,19 +99,17 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-async def _bounded_stream_read(stream: asyncio.StreamReader, cap: int) -> tuple[bytes, int, str]:
+async def _bounded_stream_read(stream: asyncio.StreamReader, cap: int) -> tuple[bytes, int]:
     kept = bytearray()
     total = 0
-    digest = hashlib.sha256()
     while True:
         chunk = await stream.read(65536)
         if not chunk:
             break
         total += len(chunk)
-        digest.update(chunk)
         if len(kept) < cap:
             kept.extend(chunk[: cap - len(kept)])
-    return bytes(kept), total, digest.hexdigest()
+    return bytes(kept), total
 
 
 _TRUNCATION_MARKER = "\n...[truncated]"
@@ -224,7 +222,8 @@ class Sandbox:
     # Versions this class's own audit-log shape, not a Limits instance —
     # bump it if the fields in _audit's record change, not when a caller
     # tunes a Limits value. v2 added open_files to effective_limits/enforcement
-    # and the "container" process_count enforcement state.
+    # and the "container" process_count state, and dropped the unused
+    # stdout_sha256/stderr_sha256 stream digests.
     policy_version = "v2"
 
     def __init__(
@@ -320,7 +319,7 @@ class Sandbox:
 
     # Shares one skeleton with run_process below: acquire the semaphore,
     # spawn cancel-safely, race the wall clock, terminate_process_group on
-    # every exit path, capture bounded/hashed output, audit in `finally`.
+    # every exit path, capture bounded output, audit in `finally`.
     # Deliberately not factored into one shared function — a third
     # execution mode should be built by diffing these two, not by first
     # understanding a generic abstraction over both.
@@ -333,7 +332,6 @@ class Sandbox:
         workspace: Path | None = None
         result = _error("internal", "execution did not start")
         stdout_total = stderr_total = 0
-        stdout_hash = stderr_hash = hashlib.sha256(b"").hexdigest()
         limits_dict = dataclasses.asdict(limits)
         try:
             try:
@@ -437,8 +435,8 @@ class Sandbox:
                     frame_tuple = await asyncio.wait_for(asyncio.shield(result_task), timeout=remaining)
                 except (asyncio.TimeoutError, TimeoutError):
                     await self._terminate_process_group(proc)
-                    stdout_data, stdout_total, stdout_hash = await stdout_task
-                    _stderr_data, stderr_total, stderr_hash = await stderr_task
+                    stdout_data, stdout_total = await stdout_task
+                    _stderr_data, stderr_total = await stderr_task
                     await result_task
                     result = _error(
                         "timeout", "execution exceeded the wall-clock limit",
@@ -458,13 +456,13 @@ class Sandbox:
                 await self._terminate_process_group(proc)
                 drained = await asyncio.gather(stdout_task, stderr_task, result_task, return_exceptions=True)
                 if isinstance(drained[0], tuple):
-                    _data, stdout_total, stdout_hash = drained[0]
+                    _data, stdout_total = drained[0]
                 if isinstance(drained[1], tuple):
-                    _data, stderr_total, stderr_hash = drained[1]
+                    _data, stderr_total = drained[1]
                 raise
 
-            stdout_data, stdout_total, stdout_hash = await stdout_task
-            stderr_data, stderr_total, stderr_hash = await stderr_task
+            stdout_data, stdout_total = await stdout_task
+            stderr_data, stderr_total = await stderr_task
             frame_data, _frame_total, frame_oversized = frame_tuple
             stdout = _decode_stdout(stdout_data, stdout_total > limits.stdout_bytes, limits.stdout_bytes)
             try:
@@ -517,12 +515,12 @@ class Sandbox:
                 self._semaphore.release()
             self._audit(
                 context, limits_dict, code, started, started_at, queue_ms, result,
-                stdout_total, stdout_hash, stderr_total, stderr_hash, spawned,
+                stdout_total, stderr_total, spawned,
             )
 
     # Shares one skeleton with execute() above: acquire the semaphore, spawn
     # cancel-safely, race the wall clock, terminate_process_group on every
-    # exit path, capture bounded/hashed output, audit in `finally`. See the
+    # exit path, capture bounded output, audit in `finally`. See the
     # comment on execute() for why that's duplicated here, not factored out.
     async def run_process(
         self, argv: list[str], *, cwd: Path, env: Mapping[str, str] | None = None,
@@ -531,7 +529,7 @@ class Sandbox:
     ) -> dict[str, Any]:
         """Run an existing program under the same rlimit/UID-drop/process-
         group/subreaper guarantees as execute(), with no JSON protocol —
-        just exit status and bounded/hashed stdout+stderr. The lower-level
+        just exit status and bounded stdout+stderr. The lower-level
         twin of execute(), for callers who already own a workspace (cwd)
         and their own way of collecting outputs, instead of wanting a
         return value or auto-discovered artifacts.
@@ -547,7 +545,6 @@ class Sandbox:
             "stdout": "", "stderr": "",
         }
         stdout_total = stderr_total = 0
-        stdout_hash = stderr_hash = hashlib.sha256(b"").hexdigest()
         try:
             try:
                 await asyncio.wait_for(self._semaphore.acquire(), timeout=limits.wall_seconds)
@@ -605,8 +602,8 @@ class Sandbox:
                     await asyncio.wait_for(asyncio.shield(proc.wait()), timeout=remaining)
                 except (asyncio.TimeoutError, TimeoutError):
                     await self._terminate_process_group(proc)
-                    stdout_data, stdout_total, stdout_hash = await stdout_task
-                    stderr_data, stderr_total, stderr_hash = await stderr_task
+                    stdout_data, stdout_total = await stdout_task
+                    stderr_data, stderr_total = await stderr_task
                     result = {
                         "status": "timeout", "returncode": proc.returncode, "timed_out": True,
                         "stdout": _decode_stdout(stdout_data, stdout_total > limits.stdout_bytes, limits.stdout_bytes),
@@ -620,8 +617,8 @@ class Sandbox:
                 await self._terminate_process_group(proc)
                 raise
 
-            stdout_data, stdout_total, stdout_hash = await stdout_task
-            stderr_data, stderr_total, stderr_hash = await stderr_task
+            stdout_data, stdout_total = await stdout_task
+            stderr_data, stderr_total = await stderr_task
             result = {
                 "status": "ok", "returncode": proc.returncode, "timed_out": False,
                 "stdout": _decode_stdout(stdout_data, stdout_total > limits.stdout_bytes, limits.stdout_bytes),
@@ -639,7 +636,7 @@ class Sandbox:
                 self._semaphore.release()
             self._audit_process(
                 request_id, argv, limits_dict, started, started_at, queue_ms, result,
-                stdout_total, stdout_hash, stderr_total, stderr_hash, spawned, audit_extra,
+                stdout_total, stderr_total, spawned, audit_extra,
             )
 
     @staticmethod
@@ -725,8 +722,7 @@ class Sandbox:
     def _audit(
         self, context: Context, limits_dict: dict[str, Any], code: str, started: float,
         started_at: datetime, queue_ms: float, result: dict[str, Any],
-        stdout_bytes: int, stdout_sha256: str, stderr_bytes: int,
-        stderr_sha256: str, spawned: bool,
+        stdout_bytes: int, stderr_bytes: int, spawned: bool,
     ) -> None:
         artifacts = result.get("artifacts") or []
         record = {
@@ -744,9 +740,7 @@ class Sandbox:
             "status": result.get("status", "error"),
             "failure_type": (result.get("error") or {}).get("type", ""),
             "stdout_bytes": stdout_bytes,
-            "stdout_sha256": stdout_sha256,
             "stderr_bytes": stderr_bytes,
-            "stderr_sha256": stderr_sha256,
             "artifact_count": len(artifacts),
             "artifact_bytes": sum(int(item.get("bytes", 0)) for item in artifacts),
             "artifact_hashes": self._artifact_hashes(context, artifacts),
@@ -758,7 +752,7 @@ class Sandbox:
     def _audit_process(
         self, request_id: str, argv: list[str], limits_dict: dict[str, Any],
         started: float, started_at: datetime, queue_ms: float, result: dict[str, Any],
-        stdout_bytes: int, stdout_sha256: str, stderr_bytes: int, stderr_sha256: str,
+        stdout_bytes: int, stderr_bytes: int,
         spawned: bool, audit_extra: Mapping[str, Any] | None,
     ) -> None:
         record = {
@@ -776,9 +770,7 @@ class Sandbox:
             "status": result.get("status", "internal"),
             "returncode": result.get("returncode"),
             "stdout_bytes": stdout_bytes,
-            "stdout_sha256": stdout_sha256,
             "stderr_bytes": stderr_bytes,
-            "stderr_sha256": stderr_sha256,
         }
         if audit_extra:
             record["audit_extra"] = dict(audit_extra)
