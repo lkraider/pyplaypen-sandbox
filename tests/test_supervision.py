@@ -219,9 +219,7 @@ async def test_artifact_aggregate_limit_cleans_workspace(tmp_path, sandbox):
     assert not list((tmp_path / "sandbox-runs").glob("*")) if (tmp_path / "sandbox-runs").exists() else True
 
 
-@pytest.mark.linux
-@pytest.mark.skipif(not os.sys.platform.startswith("linux"), reason="Linux resource semantics required")
-async def test_linux_cpu_limit_is_honestly_classified(tmp_path, sandbox):
+async def test_cpu_limit_is_honestly_classified(tmp_path, sandbox):
     limits = replace(DEFAULT_LIMITS, wall_seconds=5.0, cpu_seconds=1)
     result = await run("while True: pass", artifact_dir=str(tmp_path), sandbox=sandbox, limits=limits)
     assert result["status"] == "error"
@@ -268,9 +266,7 @@ len(children)
     assert result["error"]["type"] == "process_limit"
 
 
-@pytest.mark.linux
-@pytest.mark.skipif(not os.sys.platform.startswith("linux"), reason="Linux resource semantics required")
-async def test_linux_per_file_limit_is_enforced(tmp_path, sandbox):
+async def test_per_file_limit_is_enforced(tmp_path, sandbox):
     limits = replace(DEFAULT_LIMITS, file_bytes=1024)
     result = await run(
         'open("large.bin", "wb").write(b"x" * 4096)\nNone',
@@ -352,9 +348,7 @@ async def test_valid_open_files_value_does_not_trip_the_overflow_path(tmp_path, 
     assert result["status"] == "ok"
 
 
-@pytest.mark.linux
-@pytest.mark.skipif(not os.sys.platform.startswith("linux"), reason="Linux resource semantics required")
-async def test_linux_artifact_count_limit_cleans_workspace(tmp_path, sandbox):
+async def test_artifact_count_limit_cleans_workspace(tmp_path, sandbox):
     limits = replace(DEFAULT_LIMITS, artifact_count=1)
     result = await run(
         'open("a.txt", "w").write("a")\nopen("b.txt", "w").write("b")\nNone',

@@ -71,6 +71,16 @@ def test_process_count_unsupported_when_non_root_and_uncapped(monkeypatch):
     assert supervisor._enforcement_map()["process_count"] == "unsupported"
 
 
+def test_enforcement_map_on_macos_is_honest(monkeypatch):
+    _force(monkeypatch, platform="darwin", is_root=False)
+    m = supervisor._enforcement_map()
+    assert m["memory_bytes"] == "unsupported"
+    assert m["process_count"] == "unsupported"
+    assert m["cpu_seconds"] == "hard_per_process"
+    assert m["open_files"] == "hard"
+    assert m["file_bytes"] == "hard_per_file"
+
+
 # --- the gate: fail loud by default, warn_only to proceed, Linux-only --------
 
 @pytest.mark.real_enforcement
