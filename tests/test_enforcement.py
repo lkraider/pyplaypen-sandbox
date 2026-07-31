@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 
 import pytest
 
@@ -97,6 +98,25 @@ def test_enforcement_map_on_non_posix_downgrades(monkeypatch):
     assert m["file_bytes"] == "hard_post_run"
     assert m["memory_bytes"] == "unsupported"
     assert m["process_count"] == "unsupported"
+
+
+def test_posix_native_claims_have_a_backing_rlimit():
+    # _enforcement_map keys cpu_seconds/open_files/file_bytes off os.name, while
+    # privilege.apply_resource_limits applies the matching RLIMIT_* only if the
+    # constant exists (a missing one is silently skipped). On a POSIX host
+    # lacking one, the map would still claim it enforced while nothing was
+    # applied. These two predicates are the same fact; pin them together so that
+    # divergence can't pass as honest. (A constant check in the map itself would
+    # be speculative code for a platform that doesn't exist; this tripwire is
+    # the proportionate guard.)
+    if os.name != "posix":
+        pytest.skip("no POSIX rlimits to back the native claims")
+    import resource
+    m = supervisor._enforcement_map()
+    backing = {"cpu_seconds": "RLIMIT_CPU", "open_files": "RLIMIT_NOFILE", "file_bytes": "RLIMIT_FSIZE"}
+    for limit, rlimit in backing.items():
+        if m[limit] != "unsupported":
+            assert hasattr(resource, rlimit), (limit, rlimit)
 
 
 # --- the gate: fail loud by default, warn_only to proceed, Linux-only --------

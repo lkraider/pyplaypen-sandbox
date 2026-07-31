@@ -39,6 +39,9 @@ def apply_resource_limits(limits: Mapping[str, Any]) -> None:
     apply("RLIMIT_FSIZE", int(limits["file_bytes"]) + 1)
     apply("RLIMIT_NOFILE", int(limits["open_files"]))
     if sys.platform.startswith("linux"):
+        # Linux-only for a concrete reason, not tidiness: on Darwin RLIMIT_AS
+        # aliases RLIMIT_RSS and setrlimit rejects a real cap (ValueError), so
+        # applying it off-Linux would crash the child, not silently no-op.
         apply("RLIMIT_AS", int(limits["memory_bytes"]))
         # RLIMIT_NPROC is per real UID, system-wide, not per process group.
         # It's only safe to set when this process is about to drop to its
