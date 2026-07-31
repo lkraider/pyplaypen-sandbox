@@ -193,7 +193,17 @@ def _run(payload: dict[str, Any]) -> dict[str, Any]:
             ast.fix_missing_locations(expression)
             result = eval(compile(expression, "<sandbox_code>", "eval"), globals_map, globals_map)
         projected = _project(result, type_projector=context.get("type_projector"))
-        artifacts, translations = _provisional_artifacts(workspace, artifact_root, limits)
+        try:
+            artifacts, translations = _provisional_artifacts(workspace, artifact_root, limits)
+        except OSError as exc:
+            # rglob needs a directory fd; a tight open_files can exhaust the
+            # budget here even when the user code opened nothing (a real user
+            # open() would have raised from exec/eval above). The parent scan is
+            # authoritative, so skip return-path translation rather than
+            # misreporting the run as open_files_limit.
+            if getattr(exc, "errno", None) != 24:  # EMFILE
+                raise
+            artifacts, translations = [], {}
         projected = _replace_paths(projected, translations)
         encoded = json.dumps(projected, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
         if len(encoded) > int(limits["return_value_bytes"]):
