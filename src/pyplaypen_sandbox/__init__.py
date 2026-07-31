@@ -8,7 +8,7 @@ __all__ = [
     "Sandbox", "Context", "Limits", "DEFAULT_LIMITS", "run",
     "apply_resource_limits", "drop_root_privileges",
 ]
-__version__ = "0.2.1"
+__version__ = "0.3.0"
 
 
 async def run(
