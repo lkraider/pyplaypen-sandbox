@@ -33,14 +33,18 @@ jobs:
           # non-root + pids cap: container-enforced; gate passes with no warn_only
           docker run --rm --user 10001:10001 --pids-limit 512 pyplaypen-test python -c \
             "from pyplaypen_sandbox import Sandbox; assert Sandbox(self_check=False).enforcement['process_count']=='container'"
-          # non-root, no cap: the gate refuses construction
-          if docker run --rm --user 10001:10001 pyplaypen-test python -c \
+          # non-root, no cap: the gate refuses construction. --pids-limit=-1 is
+          # required, not incidental: the hosted runner's daemon gives every
+          # container a default finite pids.max, so a plain `docker run` is
+          # already "container"-capped here; -1 forces a genuinely uncapped
+          # container so the unsupported/gate-refusal path is actually exercised.
+          if docker run --rm --user 10001:10001 --pids-limit=-1 pyplaypen-test python -c \
             "from pyplaypen_sandbox import Sandbox; Sandbox(self_check=False)"; then
             echo "expected the enforcement gate to reject an uncapped non-root container" >&2
             exit 1
           fi
           # ...and warn_only=True proceeds anyway, honestly reporting unsupported
-          docker run --rm --user 10001:10001 pyplaypen-test python -c \
+          docker run --rm --user 10001:10001 --pids-limit=-1 pyplaypen-test python -c \
             "from pyplaypen_sandbox import Sandbox; assert Sandbox(self_check=False, warn_only=True).enforcement['process_count']=='unsupported'"
 
   test-macos:
