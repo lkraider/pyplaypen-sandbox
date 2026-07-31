@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import replace
+import errno
 import json
 import os
 import time
@@ -273,6 +274,66 @@ async def test_per_file_limit_is_enforced(tmp_path, sandbox):
         artifact_dir=str(tmp_path), sandbox=sandbox, limits=limits,
     )
     assert result["error"]["type"] == "artifact_limit"
+
+
+async def test_fsize_truncates_at_the_rlimit_independent_of_the_scan(tmp_path, sandbox):
+    # test_per_file_limit_is_enforced's "artifact_limit" is produced by the
+    # post-run scan for any oversized file and would pass even if RLIMIT_FSIZE
+    # did nothing. Isolate the rlimit: CPython ignores SIGXFSZ, so an over-limit
+    # write is a catchable EFBIG on Linux and macOS alike. The child writes far
+    # past file_bytes, catches EFBIG, deletes the file so the scan can't be the
+    # cause, and returns the size it saw on disk. A no-op rlimit would leave the
+    # full 256 KiB; instead it's exactly file_bytes+1 — the sentinel byte
+    # privilege.py adds so a truncated write lands one byte over and the scan
+    # can still catch a genuine overflow.
+    code = (
+        'import os, signal\n'
+        'signal.signal(signal.SIGXFSZ, signal.SIG_IGN)\n'
+        'fd = os.open("f.bin", os.O_WRONLY | os.O_CREAT | os.O_TRUNC)\n'
+        'err = None\n'
+        'try:\n'
+        '    for _ in range(64):\n'
+        '        os.write(fd, b"x" * 4096)\n'
+        'except OSError as exc:\n'
+        '    err = exc.errno\n'
+        'os.close(fd)\n'
+        'size = os.stat("f.bin").st_size\n'
+        'os.remove("f.bin")\n'
+        '[size, err]'
+    )
+    result = await run(
+        code, artifact_dir=str(tmp_path), sandbox=sandbox,
+        limits=replace(DEFAULT_LIMITS, file_bytes=1024, wall_seconds=5.0),
+    )
+    assert result["status"] == "ok"
+    assert result["return_value"] == [1025, errno.EFBIG]
+
+
+async def test_per_file_breach_is_swallowable_so_the_scan_is_the_backstop(tmp_path, sandbox):
+    # RLIMIT_FSIZE is not a hard process kill: CPython ignores SIGXFSZ, so an
+    # over-limit write raises a catchable EFBIG on both Linux and macOS. Code
+    # that catches it and removes the (rlimit-capped) file leaves nothing for
+    # the post-run scan, so the run reports a clean success. The "artifact_limit"
+    # outcome of test_per_file_limit_is_enforced therefore hinges on an oversized
+    # file actually being left behind, not on the write failing per se.
+    code = (
+        'try:\n'
+        '    open("big.bin", "wb").write(b"x" * 100000)\n'
+        'except OSError:\n'
+        '    pass\n'
+        'import os\n'
+        'try:\n'
+        '    os.remove("big.bin")\n'
+        'except FileNotFoundError:\n'
+        '    pass\n'
+        '"survived"'
+    )
+    result = await run(
+        code, artifact_dir=str(tmp_path), sandbox=sandbox,
+        limits=replace(DEFAULT_LIMITS, file_bytes=1024, wall_seconds=5.0),
+    )
+    assert result["status"] == "ok"
+    assert result["return_value"] == "survived"
 
 
 async def test_open_files_limit_is_enforced_and_cleans_workspace(tmp_path, sandbox):

@@ -46,8 +46,12 @@ def test_cgroup_pids_capped_false_for_garbage(tmp_path, monkeypatch):
 
 # --- _enforcement_map: process_count reflects the real mechanism -------------
 
-def _force(monkeypatch, *, platform="linux", is_root=False, capped=False):
+def _force(monkeypatch, *, platform="linux", is_root=False, capped=False, os_name="posix"):
+    # os_name is patched too: the three POSIX limits key off os.name, not
+    # sys.platform, so a case that only faked the platform would silently
+    # depend on the CI runner being POSIX and assert nothing about it.
     monkeypatch.setattr(supervisor.sys, "platform", platform)
+    monkeypatch.setattr(supervisor.os, "name", os_name)
     monkeypatch.setattr(supervisor.os, "geteuid", lambda: 0 if is_root else 1000, raising=False)
     monkeypatch.setattr(supervisor, "_cgroup_pids_capped", lambda: capped)
 
@@ -79,6 +83,20 @@ def test_enforcement_map_on_macos_is_honest(monkeypatch):
     assert m["cpu_seconds"] == "hard_per_process"
     assert m["open_files"] == "hard"
     assert m["file_bytes"] == "hard_per_file"
+
+
+def test_enforcement_map_on_non_posix_downgrades(monkeypatch):
+    # Contrast to the darwin case: with no POSIX rlimits the three limits that
+    # key off os.name must fall back, proving those classifications are real
+    # os.name-driven behavior, not constants that only read right on a POSIX
+    # runner. file_bytes still degrades to the scan-backed "hard_post_run".
+    _force(monkeypatch, platform="win32", is_root=False, os_name="nt")
+    m = supervisor._enforcement_map()
+    assert m["cpu_seconds"] == "unsupported"
+    assert m["open_files"] == "unsupported"
+    assert m["file_bytes"] == "hard_post_run"
+    assert m["memory_bytes"] == "unsupported"
+    assert m["process_count"] == "unsupported"
 
 
 # --- the gate: fail loud by default, warn_only to proceed, Linux-only --------
