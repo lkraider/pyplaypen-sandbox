@@ -137,7 +137,11 @@ def main(argv: list[str] | None = None) -> None:
     argv = list(sys.argv[1:] if argv is None else argv)
     parser = argparse.ArgumentParser(prog="pyplaypen")
     commands = parser.add_subparsers(dest="command", required=True)
-    runner = commands.add_parser("run", help="run a program under enforced limits")
+    runner = commands.add_parser(
+        "run",
+        help="run a program under enforced limits",
+        epilog="example: pyplaypen run --limit wall_seconds=30 -- python script.py",
+    )
     runner.add_argument("--limit", action="append", default=[], metavar="NAME=VALUE")
     commands.add_parser("enforcement", help="print what each limit enforces here")
     # Split on the first '--' so the target keeps its own separator:
