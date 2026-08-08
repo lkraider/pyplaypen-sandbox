@@ -73,37 +73,32 @@ def _build_sandbox() -> Sandbox:
     return Sandbox(self_check=False, warn_only=True)
 
 
-def _diagnose(result: dict[str, Any], limits: Limits) -> str | None:
-    """Name the limit that fired, from the signal only: memory_bytes surfaces
-    as MemoryError and open_files as EMFILE, both rc=1, and reading those out
-    of stderr would be Python-specific and wrong for other targets."""
+def _outcome(result: dict[str, Any], limits: Limits) -> tuple[int, str | None]:
+    """Exit code and stderr diagnostic, from one read of status/returncode:
+    memory_bytes surfaces as MemoryError and open_files as EMFILE, both rc=1,
+    and reading those out of stderr would be Python-specific and wrong for
+    other targets."""
     status, rc = result["status"], result["returncode"]
     if status == "timeout":
-        return f"wall_seconds={limits.wall_seconds} exceeded; process group terminated"
+        # GNU timeout's convention
+        return 124, f"wall_seconds={limits.wall_seconds} exceeded; process group terminated"
     if status != "ok":
-        return f"{status}: the call did not run to completion"
-    if rc is None or rc >= 0:
-        return None
+        return 125, f"{status}: the call did not run to completion"
+    rc = rc or 0
+    if rc >= 0:
+        return rc, None
+    code = 128 - rc  # shell convention for a signalled child
     named = {
         signal.SIGXCPU: f"cpu_seconds={limits.cpu_seconds} exceeded",
         signal.SIGXFSZ: f"file_bytes={limits.file_bytes} exceeded",
         signal.SIGKILL: "killed by SIGKILL — likely the container memory cgroup, not a pyplaypen limit",
     }
     if -rc in named:
-        return named[-rc]
+        return code, named[-rc]
     try:
-        return f"killed by {signal.Signals(-rc).name}"
+        return code, f"killed by {signal.Signals(-rc).name}"
     except ValueError:
-        return f"killed by signal {-rc}"
-
-
-def _exit_code(result: dict[str, Any]) -> int:
-    if result["status"] == "timeout":
-        return 124  # GNU timeout's convention
-    if result["status"] != "ok":
-        return 125
-    rc = result["returncode"] or 0
-    return rc if rc >= 0 else 128 - rc  # shell convention for a signalled child
+        return code, f"killed by signal {-rc}"
 
 
 def _run(target: list[str], requested: dict[str, Any]) -> None:
@@ -132,10 +127,10 @@ def _run(target: list[str], requested: dict[str, Any]) -> None:
             os.chown(cwd, owner.st_uid, owner.st_gid)
     sys.stdout.write(result["stdout"])
     sys.stderr.write(result["stderr"])
-    note = _diagnose(result, limits)
+    code, note = _outcome(result, limits)
     if note:
         print(f"{PREFIX} {note}", file=sys.stderr)
-    raise SystemExit(_exit_code(result))
+    raise SystemExit(code)
 
 
 def main(argv: list[str] | None = None) -> None:
