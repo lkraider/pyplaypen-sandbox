@@ -312,6 +312,20 @@
 result = await run("1 + 1", artifact_dir="./artifacts")
 # {"status": "ok", "return_value": 2, ...}</code></pre>
 
+  <h2>Command line</h2>
+  <p>
+    Installing also puts a <code>pyplaypen</code> executable on PATH. Prefix
+    any command with it to run that command under enforced limits, with no
+    code to write.
+  </p>
+
+  <pre><code>pyplaypen run --limit wall_seconds=30 -- python script.py</code></pre>
+
+  <p>
+    It refuses a limit this machine cannot enforce, and
+    <code>pyplaypen enforcement</code> prints what each limit enforces here.
+  </p>
+
   <h2>The one hook</h2>
   <p>
     Nothing about numpy, pandas, httpx, or any other library is built in.
