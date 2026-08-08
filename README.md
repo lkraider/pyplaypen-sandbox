@@ -321,7 +321,8 @@ streaming**: output arrives when the command exits. **No filesystem
 confinement**: `cwd` is your real project directory.
 **Text output only**: decoded with `errors="replace"`, so binary stdout is
 mangled. **A `file_bytes` breach is silent**: the write is truncated at the cap
-and your command is not told.
+and your command is not told. **Under root, ownership restore covers `cwd`
+only**: a file your command creates inside it keeps the dropped child uid.
 
 ## Enforcement gate
 
