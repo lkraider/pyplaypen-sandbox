@@ -29,6 +29,9 @@ classifiers = [
 ]
 dependencies = []
 
+[project.scripts]
+pyplaypen = "pyplaypen_sandbox.cli:main"
+
 [project.urls]
 Homepage = "https://lkraider.github.io/pyplaypen-sandbox/"
 Repository = "https://github.com/lkraider/pyplaypen-sandbox"

@@ -1,0 +1,156 @@
+"""Command line front end for Sandbox.run_process: bound a program's
+resources without importing anything, so a harness can substitute this for
+`python` through a PATH shim.
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import dataclasses
+import logging
+import os
+import signal
+import sys
+from pathlib import Path
+from typing import Any
+
+from .supervisor import DEFAULT_LIMITS, Limits, Sandbox
+
+PREFIX = "pyplaypen:"
+
+
+def _fail(message: str) -> None:
+    print(f"{PREFIX} {message}", file=sys.stderr)
+    raise SystemExit(2)
+
+
+def _parse_limits(pairs: list[str]) -> dict[str, Any]:
+    """name=value pairs; later ones win, so PYPLAYPEN_LIMITS sets policy once
+    and --limit overrides it per call."""
+    values: dict[str, Any] = {}
+    for pair in pairs:
+        name, sep, raw = pair.partition("=")
+        if not sep or name not in Limits.__dataclass_fields__:
+            _fail(f"unknown limit {pair!r}. Valid: {', '.join(Limits.__dataclass_fields__)}")
+        # RLIMIT_CPU quantizes to whole seconds while wall_seconds is an
+        # asyncio timer, so cpu_seconds=1.5 must be refused and
+        # wall_seconds=1.5 accepted.
+        coerce = type(getattr(DEFAULT_LIMITS, name))
+        try:
+            values[name] = coerce(raw)
+        except ValueError:
+            _fail(f"limit {name} expects {coerce.__name__}, got {raw!r}")
+    return values
+
+
+def _build_sandbox() -> Sandbox:
+    # The library gate refuses wholesale because Limits cannot distinguish a
+    # requested value from a defaulted one, which would reject the non-root
+    # shape this CLI targets; _run checks requested limits instead. The gate's
+    # warn_only warning names a Python kwarg a CLI user cannot pass, and
+    # WARNING reaches logging.lastResort with no logging configured, so it
+    # would print on every invocation.
+    audit = bool(os.environ.get("PYPLAYPEN_AUDIT"))
+    logger = logging.getLogger("pyplaypen_sandbox")
+    logger.propagate = audit
+    logger.handlers = [] if audit else [logging.NullHandler()]
+    if audit:
+        logging.basicConfig(level=logging.INFO, stream=sys.stderr)
+    return Sandbox(self_check=False, warn_only=True)
+
+
+def _diagnose(result: dict[str, Any], limits: Limits) -> str | None:
+    """Name the limit that fired, from the signal only: memory_bytes surfaces
+    as MemoryError and open_files as EMFILE, both rc=1, and reading those out
+    of stderr would be Python-specific and wrong for other targets."""
+    status, rc = result["status"], result["returncode"]
+    if status == "timeout":
+        return f"wall_seconds={limits.wall_seconds} exceeded; process group terminated"
+    if status != "ok":
+        return f"{status}: the call did not run to completion"
+    if rc is None or rc >= 0:
+        return None
+    named = {
+        signal.SIGXCPU: f"cpu_seconds={limits.cpu_seconds} exceeded",
+        signal.SIGXFSZ: f"file_bytes={limits.file_bytes} exceeded",
+        signal.SIGKILL: "killed by SIGKILL — likely the container memory cgroup, not a pyplaypen limit",
+    }
+    if -rc in named:
+        return named[-rc]
+    try:
+        return f"killed by {signal.Signals(-rc).name}"
+    except ValueError:
+        return f"killed by signal {-rc}"
+
+
+def _exit_code(result: dict[str, Any]) -> int:
+    if result["status"] == "timeout":
+        return 124  # GNU timeout's convention
+    if result["status"] != "ok":
+        return 125
+    rc = result["returncode"] or 0
+    return rc if rc >= 0 else 128 - rc  # shell convention for a signalled child
+
+
+def _run(target: list[str], requested: dict[str, Any]) -> None:
+    sandbox = _build_sandbox()
+    unsupported = [k for k, v in sandbox.enforcement.items() if v == "unsupported"]
+    refused = [k for k in unsupported if k in requested]
+    if refused:
+        _fail(
+            f"{', '.join(refused)} is not enforced here. Run the container with "
+            "--pids-limit=N, or run it as root so each call drops to a dedicated "
+            "UID. Drop the flag to proceed without it. See: pyplaypen enforcement"
+        )
+    if unsupported and not os.environ.get("PYPLAYPEN_QUIET"):
+        print(f"{PREFIX} not enforced here: {', '.join(unsupported)}", file=sys.stderr)
+
+    limits = dataclasses.replace(DEFAULT_LIMITS, **requested)
+    cwd = Path.cwd()
+    # Under root run_process chowns cwd to the child uid and, unlike execute(),
+    # never restores it, because its callers own a scratch workspace. Here cwd
+    # is the user's project directory.
+    owner = os.stat(cwd) if hasattr(os, "geteuid") and os.geteuid() == 0 else None
+    try:
+        result = asyncio.run(sandbox.run_process(target, cwd=cwd, limits=limits))
+    finally:
+        if owner is not None:
+            os.chown(cwd, owner.st_uid, owner.st_gid)
+    sys.stdout.write(result["stdout"])
+    sys.stderr.write(result["stderr"])
+    note = _diagnose(result, limits)
+    if note:
+        print(f"{PREFIX} {note}", file=sys.stderr)
+    raise SystemExit(_exit_code(result))
+
+
+def main(argv: list[str] | None = None) -> None:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    parser = argparse.ArgumentParser(prog="pyplaypen")
+    commands = parser.add_subparsers(dest="command", required=True)
+    runner = commands.add_parser("run", help="run a program under enforced limits")
+    runner.add_argument("--limit", action="append", default=[], metavar="NAME=VALUE")
+    commands.add_parser("enforcement", help="print what each limit enforces here")
+    # Split on the first '--' so the target keeps its own separator:
+    # pyplaypen run -- pytest -- -k foo.
+    sep = argv.index("--") if "--" in argv else None
+    args = parser.parse_args(argv if sep is None else argv[:sep])
+
+    if args.command == "enforcement":
+        for key, value in _build_sandbox().enforcement.items():
+            print(f"{key}: {value}")
+        raise SystemExit(0)
+
+    if sep is None:
+        _fail("expected '--' followed by the target argv")
+    target = argv[sep + 1:]
+    if not target:
+        _fail("empty target argv after '--'")
+    # stdin is DEVNULL in run_process, so `python -` would exit 0 without
+    # running anything.
+    if (len(target) == 1 and Path(target[0]).name.startswith("python")) or target[1:2] == ["-"]:
+        _fail("stdin is not available under pyplaypen run")
+
+    env_limits = [pair.strip() for pair in os.environ.get("PYPLAYPEN_LIMITS", "").split(",") if pair.strip()]
+    _run(target, _parse_limits([*env_limits, *args.limit]))
