@@ -293,7 +293,9 @@ back.
 Any `Limits` field is a valid `--limit` name. Values are plain integers, and
 `int()` accepts `_` separators. `PYPLAYPEN_LIMITS=name=value,name=value` sets
 defaults for every call, so a shim configures it once and a per-call `--limit`
-still wins.
+still wins. Negative or non-finite values are rejected: each one disables the
+limit outright, which would let a `--limit` silently escape a shim's
+`PYPLAYPEN_LIMITS` policy.
 
 `pyplaypen enforcement` prints one line per limit saying what actually enforces
 it on this machine (`hard`, `container`, `unsupported`, ...). Run it at setup

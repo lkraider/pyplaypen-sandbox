@@ -9,18 +9,19 @@ import argparse
 import asyncio
 import dataclasses
 import logging
+import math
 import os
 import signal
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 from .supervisor import DEFAULT_LIMITS, Limits, Sandbox
 
 PREFIX = "pyplaypen:"
 
 
-def _fail(message: str) -> None:
+def _fail(message: str) -> NoReturn:
     print(f"{PREFIX} {message}", file=sys.stderr)
     raise SystemExit(2)
 
@@ -35,12 +36,23 @@ def _parse_limits(pairs: list[str]) -> dict[str, Any]:
             _fail(f"unknown limit {pair!r}. Valid: {', '.join(Limits.__dataclass_fields__)}")
         # RLIMIT_CPU quantizes to whole seconds while wall_seconds is an
         # asyncio timer, so cpu_seconds=1.5 must be refused and
-        # wall_seconds=1.5 accepted.
+        # wall_seconds=1.5 accepted. supervisor.py's postponed annotations
+        # turn __dataclass_fields__[name].type into the string "float", so
+        # the default's runtime type is what's usable here.
         coerce = type(getattr(DEFAULT_LIMITS, name))
         try:
-            values[name] = coerce(raw)
+            value = coerce(raw)
         except ValueError:
             _fail(f"limit {name} expects {coerce.__name__}, got {raw!r}")
+        # On Linux, the deployment target, resource.RLIM_INFINITY is a
+        # negative int, so --limit memory_bytes=-1 would silently remove that
+        # cap and escape a PYPLAYPEN_LIMITS policy. wall_seconds=inf removes
+        # the wall clock the same way. wall_seconds=nan reaches
+        # asyncio.wait_for and crashes the event loop (TypeError from the
+        # selector).
+        if value < 0 or (isinstance(value, float) and not math.isfinite(value)):
+            _fail(f"limit {name} must be a non-negative finite {coerce.__name__}, got {raw!r}")
+        values[name] = value
     return values
 
 

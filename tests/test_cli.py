@@ -77,6 +77,13 @@ def test_uncoercible_limit_values_are_rejected(pair):
     assert run("--limit", pair, "--", PY, "-c", "pass") == 2
 
 
+@pytest.mark.parametrize("pair", ["memory_bytes=-1", "wall_seconds=-1", "wall_seconds=nan", "wall_seconds=inf"])
+def test_negative_and_non_finite_limit_values_are_rejected(pair):
+    # Grouped: int()/float() coerce all four without raising, so none of
+    # these reaches the ValueError path above.
+    assert run("--limit", pair, "--", PY, "-c", "pass") == 2
+
+
 @pytest.mark.parametrize("pair", ["wall_seconds=1.5", "stdout_bytes=1_048_576"])
 def test_well_typed_limit_values_are_accepted(pair):
     # Counterfactual to the rejections above: the float field takes a float,
