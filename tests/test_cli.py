@@ -127,6 +127,12 @@ def test_quiet_silences_the_notice(unsupported_process_count, capsys):
     assert capsys.readouterr().err == ""
 
 
+def test_quiet_requires_the_literal_value_one(unsupported_process_count, monkeypatch, capsys):
+    monkeypatch.setenv("PYPLAYPEN_QUIET", "0")
+    assert run("--", PY, "-c", "print(1)") == 0
+    assert capsys.readouterr().err != ""
+
+
 @pytest.mark.real_enforcement
 def test_library_warn_only_warning_never_reaches_stderr(unsupported_process_count, capsys):
     # The gate runs for real here; its warning tells the reader to pass a

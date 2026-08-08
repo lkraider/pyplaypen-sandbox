@@ -62,8 +62,9 @@ def _build_sandbox() -> Sandbox:
     # shape this CLI targets; _run checks requested limits instead. The gate's
     # warn_only warning names a Python kwarg a CLI user cannot pass, and
     # WARNING reaches logging.lastResort with no logging configured, so it
-    # would print on every invocation.
-    audit = bool(os.environ.get("PYPLAYPEN_AUDIT"))
+    # would print on every invocation. Mutes that by configuring the
+    # process-global "pyplaypen_sandbox" logger before Sandbox() runs the gate.
+    audit = os.environ.get("PYPLAYPEN_AUDIT") == "1"
     logger = logging.getLogger("pyplaypen_sandbox")
     logger.propagate = audit
     logger.handlers = [] if audit else [logging.NullHandler()]
@@ -115,7 +116,7 @@ def _run(target: list[str], requested: dict[str, Any]) -> None:
             "--pids-limit=N, or run it as root so each call drops to a dedicated "
             "UID. Drop the flag to proceed without it. See: pyplaypen enforcement"
         )
-    if unsupported and not os.environ.get("PYPLAYPEN_QUIET"):
+    if unsupported and os.environ.get("PYPLAYPEN_QUIET") != "1":
         print(f"{PREFIX} not enforced here: {', '.join(unsupported)}", file=sys.stderr)
 
     limits = dataclasses.replace(DEFAULT_LIMITS, **requested)
