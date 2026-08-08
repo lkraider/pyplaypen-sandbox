@@ -42,6 +42,9 @@ snippet in an isolated subprocess, capped at 5 seconds of wall time and
 256 MB of memory, and return the result: <code>
 ```
 
+To bound a command without writing any integration, prefix it:
+`pyplaypen run -- python script.py` (see "Command line").
+
 For a project integration, read "Extending it" and "Lower-level building
 blocks" below first. The decision points are `execute()` vs.
 `run_process()`, whether a `globals_provider` or `type_projector` is
@@ -261,6 +264,62 @@ at the container layer — otherwise the enforcement gate will refuse to start
 and as the dedicated non-root UID with `--pids-limit`, plus a step asserting the
 gate rejects an uncapped non-root container — so both deployment shapes and the
 gate are exercised on real Linux, not just where they no-op.
+
+### Command line
+
+Installing the package puts a `pyplaypen` executable on PATH. Prefix any command
+with it to run that command under enforced limits, with no code to write. Agent
+harnesses spawn Python as a subprocess, so this is how a harness uses the
+sandbox: shim `pyplaypen run --` in front of the interpreter it already calls.
+
+```
+pyplaypen run [--limit name=value]... -- <argv>...
+pyplaypen enforcement
+```
+
+```bash
+pyplaypen run -- python script.py
+pyplaypen run --limit wall_seconds=300 --limit memory_bytes=2_147_483_648 -- pytest -q
+PYPLAYPEN_LIMITS=wall_seconds=60 pyplaypen run -- ./some-tool --flag
+```
+
+`run` starts your command in its own process group, in the current directory,
+with the current environment, capping CPU time, memory, open files and file size
+per process. It kills the whole group, including anything the command spawned,
+when `wall_seconds` runs out. Your command's stdout and stderr are printed when
+it exits, truncated at `stdout_bytes`/`stderr_bytes`, and you get its exit code
+back.
+
+Any `Limits` field is a valid `--limit` name. Values are plain integers, and
+`int()` accepts `_` separators. `PYPLAYPEN_LIMITS=name=value,name=value` sets
+defaults for every call, so a shim configures it once and a per-call `--limit`
+still wins.
+
+`pyplaypen enforcement` prints one line per limit saying what actually enforces
+it on this machine (`hard`, `container`, `unsupported`, ...). Run it at setup
+time to find out whether the guarantees you need are available here.
+
+`run` refuses a limit it cannot keep. `--limit process_count=4` on a non-root
+host with no pids cap exits 2 and tells you how to fix it; the same limit left at
+its default runs normally and prints one `pyplaypen:` line naming what goes
+unenforced here, which `PYPLAYPEN_QUIET=1` silences. The Python API refuses at
+construction instead; see "Enforcement gate". `PYPLAYPEN_AUDIT=1` prints the
+per-call audit record to stderr.
+
+Exit codes: your command's own, or `128+signum` if a signal killed it; `124` on
+timeout; `125` if the sandbox could not run it at all; `2` for a usage error or a
+refused limit. Every line the CLI writes to stderr starts with `pyplaypen:`, so
+it separates from your command's own output, and it names the limit behind a
+signal death that would otherwise arrive as a bare `-24`.
+
+What it does not do. **No stdin**: your command reads EOF immediately, so a bare
+interpreter or a `-` argument is refused instead of silently running an empty
+program (`python -c`, `python script.py` and `pytest` are unaffected). **No
+streaming**: output arrives when the command exits. **No filesystem
+confinement**: `cwd` is your real project directory.
+**Text output only**: decoded with `errors="replace"`, so binary stdout is
+mangled. **A `file_bytes` breach is silent**: the write is truncated at the cap
+and your command is not told.
 
 ## Enforcement gate
 

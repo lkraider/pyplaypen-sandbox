@@ -49,6 +49,22 @@ jobs:
           # ...and warn_only=True proceeds anyway, honestly reporting unsupported
           docker run --rm --user 10001:10001 -v /tmp/pidsmax:/sys/fs/cgroup/pids.max:ro pyplaypen-test python -c \
             "from pyplaypen_sandbox import Sandbox; assert Sandbox(self_check=False, warn_only=True).enforcement['process_count']=='unsupported'"
+      # Unit tests call main() directly, so nothing else covers the console
+      # script entry point.
+      - name: CLI is installed and runs unprivileged
+        run: |
+          docker run --rm --user 10001:10001 pyplaypen-test pyplaypen run -- python -c "print(42)"
+          docker run --rm --user 10001:10001 pyplaypen-test pyplaypen enforcement
+      - name: CLI refuses an unenforceable limit, accepts an enforceable one
+        run: |
+          set -euo pipefail
+          if docker run --rm --user 10001:10001 -v /tmp/pidsmax:/sys/fs/cgroup/pids.max:ro pyplaypen-test \
+            pyplaypen run --limit process_count=2 -- python -c "print(1)"; then
+            echo "expected the CLI to refuse process_count with no cgroup pids cap" >&2
+            exit 1
+          fi
+          docker run --rm --user 10001:10001 --pids-limit 512 pyplaypen-test \
+            pyplaypen run --limit process_count=2 -- python -c "print(1)"
 
   test-macos:
     runs-on: macos-latest
